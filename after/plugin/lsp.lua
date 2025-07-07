@@ -305,6 +305,7 @@ end
 -- Check if the `CWD` is equal ro `rust`
 if vim.fn.expand('%:p:h:t') == "rust" then
     require("lspconfig").rust_analyzer.setup {
+        cmd = { "rust-analyzer" }, -- Uses the one in $PATH
         settings = {
             ["rust-analyzer"] = {
                 check = {
@@ -348,14 +349,25 @@ if vim.fn.expand('%:p:h:t') == "rust" then
         },
     }
 else
-    require("lspconfig").rust_analyzer.setup {
+    -- require("lspconfig").rust_analyzer.setup {
+    --     settings = {
+    --         ["rust-analyzer"] = {
+    --             rustcSource = "discover",
+    --         }
+    --         -- diagnostics = {
+    --         --     disabled = { "unresolved-proc-macro" }
+    --         -- },
+    --     },
+    -- }
+    require('lspconfig').rust_analyzer.setup {
+        cmd = { "rust-analyzer" }, -- Uses the one in $PATH
         settings = {
             ["rust-analyzer"] = {
-                rustcSource = "discover",
-            }
-            -- diagnostics = {
-            --     disabled = { "unresolved-proc-macro" }
-            -- },
+                cargo = { allFeatures = true },
+                checkOnSave = {
+                    command = "clippy",
+                },
+            },
         },
     }
 end
