@@ -519,38 +519,39 @@ vim.api.nvim_create_autocmd('FileType', {
 -- })
 
 -- ------------ Questionnarie Language ------------
-vim.api.nvim_create_autocmd('FileType', {
-    pattern = 'qn',
-    callback = function()
-        -- os.execute('./runLSP.sh > /dev/null 2>&1 &') -- UNUSED
-        -- os.execute('./gradlew runLSP -q --console=plain > /dev/null 2>&1 &')
-        -- os.execute('sleep 1')
-
-        vim.lsp.start({
-            name = 'qn',
-            cmd = vim.lsp.rpc.connect('127.0.0.1', 5123),
-            root_dir = vim.fs.dirname(vim.fs.find({ 'start.lsp', 'build.gradle' }, { upward = true })[1]),
-            -- filetypes = { 'tst', 'nl },
-        })
-    end,
-})
-
 -- vim.api.nvim_create_autocmd('FileType', {
 --     pattern = 'qn',
 --     callback = function()
---         local cmd = {
---             "java",
---             "-jar",
---             "/Users/federicobruzzone/dev/SVN/neverlang-commons/trunk/neverlang-languages/questionnaire-language/questionnaire-language-lang/build/libs/questionnaire-language-client.jar"
---         }
---         local client = vim.lsp.start({
+--         -- os.execute('./runLSP.sh > /dev/null 2>&1 &') -- UNUSED
+--         -- os.execute('./gradlew runLSP -q --console=plain > /dev/null 2>&1 &')
+--         -- os.execute('sleep 1')
+--
+--         vim.lsp.start({
 --             name = 'qn',
---             cmd = cmd,
+--             cmd = vim.lsp.rpc.connect('127.0.0.1', 5123),
 --             root_dir = vim.fs.dirname(vim.fs.find({ 'start.lsp', 'build.gradle' }, { upward = true })[1]),
+--             -- filetypes = { 'tst', 'nl },
 --         })
---         vim.lsp.buf_attach_client(0, client)
 --     end,
 -- })
+
+vim.api.nvim_create_autocmd('FileType', {
+    pattern = 'qn',
+    callback = function()
+        local cmd = {
+            "java",
+            "-jar",
+            -- "/Users/federicobruzzone/dev/SVN/neverlang-commons/trunk/neverlang-languages/questionnaire-language/questionnaire-language-lang/build/libs/questionnaire-language-client.jar"
+            "/Users/federicobruzzone/dev/SVN/neverlang-commons/trunk/neverlang-languages/questionnaire-language/questionnaire-language-client/build/libs/ql.QuestionnarieLanguage-client.jar",
+        }
+        local client = vim.lsp.start({
+            name = 'qn',
+            cmd = cmd,
+            root_dir = vim.fs.dirname(vim.fs.find({ 'start.lsp', 'build.gradle' }, { upward = true })[1]),
+        })
+        vim.lsp.buf_attach_client(0, client)
+    end,
+})
 ------------------------------------------------------
 -------------------- NULL-LS CONFIG ------------------
 ------------------------------------------------------

@@ -13,7 +13,7 @@ vim.opt.rtp:prepend(lazypath)
 
 require("lazy").setup({
     { 'AlexvZyl/nordic.nvim' },
-    { 'rose-pine/neovim' },
+    { 'mcauley-penney/techbase.nvim' },
 
 
     { 'nvim-telescope/telescope.nvim' },
