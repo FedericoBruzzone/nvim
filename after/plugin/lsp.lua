@@ -266,9 +266,9 @@ require("lspconfig").lua_ls.setup {
     },
 }
 -- local capabilities = vim.lsp.protocol.make_client_capabilities()
--- capabilities.offsetEncoding = { "utf-16" }
 local capabilities = lsp_defaults.capabilities
 capabilities.offsetEncoding = { "utf-8" }
+
 require("lspconfig").clangd.setup {
     capabilities = capabilities,
 }
@@ -287,7 +287,8 @@ require("lspconfig").pyright.setup {
                 useLibraryCodeForTypes = true,
                 typeCheckingMode = 'off' }
         }
-    }
+    },
+    capabilities = capabilities,
 }
 require("lspconfig").ts_ls.setup {}
 require("lspconfig").ocamllsp.setup {}

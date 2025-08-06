@@ -12,10 +12,6 @@ end
 vim.opt.rtp:prepend(lazypath)
 
 require("lazy").setup({
-    { 'AlexvZyl/nordic.nvim' },
-    { 'mcauley-penney/techbase.nvim' },
-
-
     { 'nvim-telescope/telescope.nvim' },
     { 'nvim-lua/plenary.nvim' },
     { "nvim-telescope/telescope-symbols.nvim" }, -- UNICODE CHARACTERS
@@ -42,9 +38,9 @@ require("lazy").setup({
     -- { "rafamadriz/friendly-snippets" }, -- a bunch of snippets to use
 
     -- SYNTAX HIGHLIGHTING
-    { 'nvim-treesitter/nvim-treesitter-textobjects' },
-    { 'nvim-treesitter/nvim-treesitter-context' },
     { 'nvim-treesitter/nvim-treesitter',            build = ":TSUpdate" },
+    -- { 'nvim-treesitter/nvim-treesitter-textobjects' },
+    -- { 'nvim-treesitter/nvim-treesitter-context' },
 
     -- FILE EXPLORER
     { "nvim-tree/nvim-tree.lua", },
@@ -106,41 +102,6 @@ require("lazy").setup({
         },
     },
 
-    -- Agda
-    {
-        "ashinkarov/nvim-agda",
-        lazy = false,
-        config = function()
-            vim.g.nvim_agda_settings = {
-                -- agda = "/usr/local/bin/agda",       -- Location of Agda binary
-                -- agda_args = { "--arg1", "--arg2" }, -- Default arguments to Agda binary
-                debug_p = true -- Turn debug prints on or off
-            }
-        end
-    },
-
-    -- COQ
-    {
-        'whonore/Coqtail',
-        init = function()
-            vim.g.loaded_coqtail = 1
-            vim.g["coqtail#supported"] = 0
-        end,
-    },
-    {
-        'tomtomjhj/vscoq.nvim',
-        filetypes = 'coq',
-        dependecies = {
-            'neovim/nvim-lspconfig',
-            'whonore/Coqtail',
-        },
-        opts = {
-            -- vscoq = { ... }
-            -- lsp = { ... }
-        },
-    },
-
-
     -- MARKDOWN PREVIEW
     {
         "iamcco/markdown-preview.nvim",
@@ -162,6 +123,10 @@ require("lazy").setup({
 
 
     --- UI
+    { "rose-pine/neovim" },
+    { "nvim-tree/nvim-web-devicons" }, -- File icons
+    { "SmiteshP/nvim-navic" }, -- LSP status in the statusline
+    {'akinsho/bufferline.nvim' }, -- Bufferline
     {
         "folke/noice.nvim",
         event = "VeryLazy",
@@ -179,7 +144,6 @@ require("lazy").setup({
     },
     {
         'nvim-lualine/lualine.nvim',
-        dependencies = { 'nvim-tree/nvim-web-devicons' }
     }
 
 })
@@ -263,5 +227,39 @@ require("lazy").setup({
 -- GIT
 -- { "tpope/vim-fugitive" },
 
--- -- COQ
+-- Agda
+-- {
+--     "ashinkarov/nvim-agda",
+--     lazy = false,
+--     config = function()
+--         vim.g.nvim_agda_settings = {
+--             -- agda = "/usr/local/bin/agda",       -- Location of Agda binary
+--             -- agda_args = { "--arg1", "--arg2" }, -- Default arguments to Agda binary
+--             debug_p = true -- Turn debug prints on or off
+--         }
+--     end
+-- },
+
+-- COQ
+-- {
+--     'whonore/Coqtail',
+--     init = function()
+--         vim.g.loaded_coqtail = 1
+--         vim.g["coqtail#supported"] = 0
+--     end,
+-- },
+-- {
+--     'tomtomjhj/vscoq.nvim',
+--     filetypes = 'coq',
+--     dependecies = {
+--         'neovim/nvim-lspconfig',
+--         'whonore/Coqtail',
+--     },
+--     opts = {
+--         -- vscoq = { ... }
+--         -- lsp = { ... }
+--     },
+-- },
+
+-- NO -- COQ
 -- { 'whonore/Coqtail', },

@@ -4,6 +4,8 @@ vim.opt.laststatus = 2
 vim.opt.nu = true
 -- Set relativenumber
 vim.opt.relativenumber = true
+-- Set the terminal to use 256 colors
+vim.opt.termguicolors = true
 -- Set wrap to true
 -- vim.opt.wrap = true
 -- The tabstop option will make the number of spaces to insert when you press the tab key
