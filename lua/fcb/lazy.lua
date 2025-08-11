@@ -38,7 +38,7 @@ require("lazy").setup({
     -- { "rafamadriz/friendly-snippets" }, -- a bunch of snippets to use
 
     -- SYNTAX HIGHLIGHTING
-    { 'nvim-treesitter/nvim-treesitter',            build = ":TSUpdate" },
+    { 'nvim-treesitter/nvim-treesitter',      build = ":TSUpdate" },
     -- { 'nvim-treesitter/nvim-treesitter-textobjects' },
     -- { 'nvim-treesitter/nvim-treesitter-context' },
 
@@ -123,10 +123,10 @@ require("lazy").setup({
 
 
     --- UI
-    { "rose-pine/neovim" },
+    { "vague2k/vague.nvim" },
     { "nvim-tree/nvim-web-devicons" }, -- File icons
-    { "SmiteshP/nvim-navic" }, -- LSP status in the statusline
-    {'akinsho/bufferline.nvim' }, -- Bufferline
+    { "SmiteshP/nvim-navic" },         -- LSP status in the statusline
+    { 'akinsho/bufferline.nvim' },     -- Bufferline
     {
         "folke/noice.nvim",
         event = "VeryLazy",
