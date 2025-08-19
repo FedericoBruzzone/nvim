@@ -42,8 +42,7 @@ require("lazy").setup({
     -- { 'nvim-treesitter/nvim-treesitter-textobjects' },
     -- { 'nvim-treesitter/nvim-treesitter-context' },
 
-    -- FILE EXPLORER
-    { "nvim-tree/nvim-tree.lua", },
+    
 
     -- GIT
     { "lewis6991/gitsigns.nvim" },
@@ -123,10 +122,9 @@ require("lazy").setup({
 
 
     --- UI
-    { "vague2k/vague.nvim" },
+    { "vague2k/vague.nvim" }, 
     { "nvim-tree/nvim-web-devicons" }, -- File icons
     { "SmiteshP/nvim-navic" },         -- LSP status in the statusline
-    { 'akinsho/bufferline.nvim' },     -- Bufferline
     {
         "folke/noice.nvim",
         event = "VeryLazy",
@@ -142,10 +140,11 @@ require("lazy").setup({
             "rcarriga/nvim-notify",
         }
     },
-    {
-        'nvim-lualine/lualine.nvim',
-    }
-
+    { 'akinsho/bufferline.nvim' },     -- Bufferline
+    { 'nvim-lualine/lualine.nvim', }, -- Statusline
+    { "nvim-tree/nvim-tree.lua", }, -- File Explorer
+    { "lukas-reineke/indent-blankline.nvim" }, -- Indentation guides
+    { 'sphamba/smear-cursor.nvim' }, -- Smooth cursor movement
 })
 
 -- -- Autopairs
