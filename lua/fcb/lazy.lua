@@ -122,7 +122,7 @@ require("lazy").setup({
 
 
     --- UI
-    { "vague2k/vague.nvim" }, 
+    { "rose-pine/neovim" },
     { "nvim-tree/nvim-web-devicons" }, -- File icons
     { "SmiteshP/nvim-navic" },         -- LSP status in the statusline
     {
