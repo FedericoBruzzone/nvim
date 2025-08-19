@@ -55,7 +55,7 @@ vim.opt.cursorline = true
 -- How and where to highlight the current line
 vim.opt.cursorlineopt="line,number" -- valid values: "line", "number", "both"
 -- Set the listchars option to show whitespace characters
-vim.opt.listchars = { lead = '·', tab = '│·', trail = '·', extends = '⟩', precedes = '⟨', nbsp = '␣' }
+vim.opt.listchars = { lead = '·', tab = '> ', trail = '·', extends = '⟩', precedes = '⟨', nbsp = '␣' }
 -- Show whitespace characters
 vim.opt.list = true
 
