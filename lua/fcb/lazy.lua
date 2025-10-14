@@ -144,7 +144,6 @@ require("lazy").setup({
             "rcarriga/nvim-notify",
         }
     },
-    { 'akinsho/bufferline.nvim' },             -- Bufferline
     { 'nvim-lualine/lualine.nvim', },          -- Statusline
     { "nvim-tree/nvim-tree.lua", },            -- File Explorer
     { "lukas-reineke/indent-blankline.nvim" }, -- Indentation guides

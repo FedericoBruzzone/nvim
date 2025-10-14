@@ -1,3 +1,4 @@
+-- { 'akinsho/bufferline.nvim' },             -- Bufferline
 require("bufferline").setup {
     options = {
         offsets = {
@@ -11,5 +12,3 @@ require("bufferline").setup {
         diagnostics = "nvim_lsp",
     }
 }
-
-
