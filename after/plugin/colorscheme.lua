@@ -53,5 +53,16 @@ require('nordic').setup({
         dark_background = true,
     }
 })
+
 -- require('nordic').load()
-vim.cmd('set background=light')
+-- vim.cmd('set background=light')
+vim.cmd('colorscheme github_light_high_contrast')
+
+-- switch between light and dark mode with <leader>ut
+vim.keymap.set('n', '<leader>ut', function()
+    if vim.o.background == 'light' then
+        vim.o.background = 'dark'
+    else
+        vim.o.background = 'light'
+    end
+end, { desc = "Toggle light/dark mode" })
