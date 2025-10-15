@@ -53,4 +53,5 @@ require('nordic').setup({
         dark_background = true,
     }
 })
-require('nordic').load()
+-- require('nordic').load()
+vim.cmd('set background=light')
