@@ -129,21 +129,6 @@ require("lazy").setup({
     { "AlexvZyl/nordic.nvim" },
     { "nvim-tree/nvim-web-devicons" }, -- File icons
     { "SmiteshP/nvim-navic" },         -- LSP status in the statusline
-    {
-        "folke/noice.nvim",
-        event = "VeryLazy",
-        opts = {
-            -- add any options here
-        },
-        dependencies = {
-            -- if you lazy-load any plugin below, make sure to add proper `module="..."` entries
-            "MunifTanjim/nui.nvim",
-            -- OPTIONAL:
-            --   `nvim-notify` is only needed, if you want to use the notification view.
-            --   If not available, we use `mini` as the fallback
-            "rcarriga/nvim-notify",
-        }
-    },
     { 'nvim-lualine/lualine.nvim', },          -- Statusline
     { "nvim-tree/nvim-tree.lua", },            -- File Explorer
     { "lukas-reineke/indent-blankline.nvim" }, -- Indentation guides
