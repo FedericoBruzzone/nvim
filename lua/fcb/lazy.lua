@@ -127,7 +127,6 @@ require("lazy").setup({
 
     --- UI
     { "AlexvZyl/nordic.nvim" },
-    { "projekt0n/github-nvim-theme" },
     { "nvim-tree/nvim-web-devicons" }, -- File icons
     { "SmiteshP/nvim-navic" },         -- LSP status in the statusline
     { 'nvim-lualine/lualine.nvim', },          -- Statusline
