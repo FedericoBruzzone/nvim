@@ -121,7 +121,7 @@ require("lazy").setup({
     {
         "github/copilot.vim",
         config = function()
-            -- vim.g.copilot_enabled = 0 -- Disable copilot
+            vim.g.copilot_enabled = 0 -- Disable copilot
         end
     },
 
