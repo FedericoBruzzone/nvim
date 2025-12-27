@@ -3,12 +3,12 @@ vim.lsp.config('*', {
 })
 
 vim.diagnostic.config({
-    virtual_lines = true, -- this gets messy on large code base with tons of errors
+    -- virtual_lines = true, -- this gets messy on large code base with tons of errors
     -- Select either virtual lines or text below otherwise it gets messy
-    -- virtual_text = {
-    --     spacing = 4,
-    --     prefix = "●", -- This is fine as a string
-    -- },
+    virtual_text = {
+        spacing = 4,
+        prefix = "●", -- This is fine as a string
+    },
 
     underline = true,
     update_in_insert = false,
@@ -59,7 +59,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         map('n', 'go', vim.lsp.buf.type_definition)
         map('n', 'gr', vim.lsp.buf.references)
         map('n', '<D-i>', vim.lsp.buf.signature_help)
-        map('n', 'gl', vim.diagnostic.open_float)
+        map('n', '<leader>e', vim.diagnostic.open_float)
         map('n', '<F2>', vim.lsp.buf.rename)
         map({ 'n', 'x' }, '<D-S-i>', function() vim.lsp.buf.format({ async = true }) end)
         map('n', '<D-.>', vim.lsp.buf.code_action)
@@ -81,6 +81,29 @@ vim.api.nvim_create_autocmd('LspAttach', {
 })
 
 local caps = require("cmp_nvim_lsp").default_capabilities()
+
+vim.lsp.config['lua_ls'] = {
+    cmd = { 'lua-language-server' },
+    filetypes = { 'lua' },
+    root_markers = { { '.luarc.json', '.luarc.jsonc' }, '.git' },
+    capabilities = caps,
+    settings = {
+        Lua = {
+            runtime = { version = 'LuaJIT' },
+            diagnostics = { globals = { 'vim', 'require' } },
+            workspace = {
+                checkThirdParty = false,
+                -- This is too heavy; the language server takes ages to start.
+                -- library = vim.api.nvim_get_runtime_file('', true),
+                library = {
+                    [vim.fn.expand("$VIMRUNTIME/lua")] = true,
+                    [vim.fn.stdpath("config") .. "/lua"] = true,
+                },
+            },
+            telemetry = { enable = false },
+        },
+    },
+}
 
 -- Rust via rust-analyzer
 vim.lsp.config['rust_analyzer'] = {
@@ -143,24 +166,6 @@ vim.lsp.enable("texlab") -- via Mason
 
 
 --- =====Usual common settings for some *unused* local LSP servers=====
-
--- vim.lsp.config['lua_ls'] = {
---     cmd = { 'lua-language-server' },
---     filetypes = { 'lua' },
---     root_markers = { { '.luarc.json', '.luarc.jsonc' }, '.git' },
---     capabilities = caps,
---     settings = {
---         Lua = {
---             runtime = { version = 'LuaJIT' },
---             diagnostics = { globals = { 'vim' } },
---             workspace = {
---                 checkThirdParty = false,
---                 library = vim.api.nvim_get_runtime_file('', true),
---             },
---             telemetry = { enable = false },
---         },
---     },
--- }
 
 -- vim.lsp.config['jsonls'] = {
 --     cmd = { 'vscode-json-languageserver', '--stdio' },

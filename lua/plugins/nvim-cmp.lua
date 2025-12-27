@@ -12,7 +12,10 @@ return {
         cmp.setup({
             preselect = cmp.PreselectMode.Item, -- <— preselect first item
             completion = { completeopt = "menu,menuone,noinsert" },
-            window = { documentation = cmp.config.window.bordered() },
+            window = {
+                documentation = cmp.config.window.bordered(),
+                completion = cmp.config.window.bordered(),
+            },
             mapping = cmp.mapping.preset.insert({
                 ["<CR>"]      = cmp.mapping.confirm({ select = false }),
                 ["<C-e>"]     = cmp.mapping.abort(),
@@ -33,6 +36,11 @@ return {
                 { name = "path" },
                 { name = "buffer",  keyword_length = 3 },
             },
+        })
+
+        cmp.setup.cmdline({ "/", "?" }, {
+            mapping = cmp.mapping.preset.cmdline(), -- Tab for selection (arrows needed for selecting past items)
+            sources = { { name = "buffer" }, { name = "cmdline" }, { name = "path" } }
         })
     end,
 }
