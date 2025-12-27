@@ -20,7 +20,3 @@ autocmd('TextYankPost', {
         })
     end,
 })
-
-vim.cmd("colorscheme vim")
-vim.api.nvim_set_hl(0, "Normal", { bg = "Black" })
-vim.api.nvim_set_hl(0, "SignColumn", { bg = "Black" })

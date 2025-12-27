@@ -1,4 +1,5 @@
 return {
+    -- https://docs.rockylinux.org/10/books/nvchad/nvchad_ui/nvimtree/
     -- <S-i> will toggle visibility of hidden files
     -- <S-h> will toggle visibility of dotfiles
     "nvim-tree/nvim-tree.lua",
@@ -26,12 +27,12 @@ return {
             },
             view = {
                 width = 35,
+                side = "right",
                 -- relativenumber = true,
             },
             renderer = {
-                indent_markers = {
-                    enable = true,
-                },
+                indent_markers = { enable = true, },
+                highlight_git = true,
             },
             filters = {
                 custom = {},
@@ -66,17 +67,17 @@ return {
             desc = "Toggle file explorer",
         },
         {
-            "<D-f>",
-            ":NvimTreeFindFileToggle<CR>",
-            mode = { "n" },
-            desc = "Toggle file explorer on current file",
-        },
-        {
             "<leader>r",
             ":NvimTreeRefresh<CR>",
             mode = { "n" },
             desc = "Refresh file explorer"
         },
+        -- {
+        --     "<leader>n",
+        --     ":NvimTreeFindFileToggle<CR>",
+        --     mode = { "n" },
+        --     desc = "Toggle file explorer on current file",
+        -- },
         -- {
         --     "<leader>ec",
         --     ":NvimTreeCollapse<CR>",
