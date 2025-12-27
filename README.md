@@ -1,10 +1,6 @@
-# Neovim Config
+# Neovim 0.11 Setup
 
-This repository contains my personal Neovim configuration files. 
-
-## Contributing
-
-Contributions to this project are welcome! If you have any suggestions, improvements, or bug fixes, feel free to submit a pull request.
+This repository contains my personal _modern_ Neovim v0.11 configuration setup.
 
 ## Contact
 

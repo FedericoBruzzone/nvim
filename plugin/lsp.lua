@@ -52,7 +52,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
         map({ 'n', 'x' }, '<F3>', function() vim.lsp.buf.format({ async = true }) end)
         map('n', '<F4>', vim.lsp.buf.code_action)
 
-        local excluded_filetypes = { php = true, c = true, cpp = true }
+        local excluded_filetypes = {} -- c = true, cpp = true }
         if not client:supports_method('textDocument/willSaveWaitUntil')
             and client:supports_method('textDocument/formatting')
             and not excluded_filetypes[vim.bo[buf].filetype]
@@ -70,24 +70,7 @@ vim.api.nvim_create_autocmd('LspAttach', {
 
 local caps = require("cmp_nvim_lsp").default_capabilities()
 
-vim.lsp.config['lua_ls'] = {
-    cmd = { 'lua-language-server' },
-    filetypes = { 'lua' },
-    root_markers = { { '.luarc.json', '.luarc.jsonc' }, '.git' },
-    capabilities = caps,
-    settings = {
-        Lua = {
-            runtime = { version = 'LuaJIT' },
-            diagnostics = { globals = { 'vim' } },
-            workspace = {
-                checkThirdParty = false,
-                library = vim.api.nvim_get_runtime_file('', true),
-            },
-            telemetry = { enable = false },
-        },
-    },
-}
-
+-- Rust via rust-analyzer
 vim.lsp.config['rust_analyzer'] = {
     cmd = { 'rust-analyzer' },
     filetypes = { 'rust' },
@@ -96,6 +79,8 @@ vim.lsp.config['rust_analyzer'] = {
     settings = {
         ['rust-analyzer'] = {
             cargo = { allFeatures = true },
+            checkOnSave = { command = 'clippy', }, -- Use Clippy on save
+            rustcSource = "discover",              -- To work with rust-src component
             formatting = {
                 command = { "rustfmt" }
             },
@@ -120,13 +105,6 @@ vim.lsp.config['clangd'] = {
     },
 }
 
-vim.lsp.config['jsonls'] = {
-    cmd = { 'vscode-json-languageserver', '--stdio' },
-    filetypes = { 'json', 'jsonc' },
-    root_markers = { 'package.json', '.git', 'config.jsonc' },
-    capabilities = caps,
-}
-
 vim.filetype.add({
     extension = {
         h = 'c',
@@ -146,7 +124,35 @@ if vim.lsp.inlay_hint then
 end
 
 
-vim.lsp.enable("lua_ls")
 vim.lsp.enable("rust_analyzer")
 vim.lsp.enable("clangd")
-vim.lsp.enable("jsonls")
+vim.lsp.enable("lua_ls") -- via Mason
+vim.lsp.enable("texlab") -- via Mason
+
+
+--- =====Usual common settings for some *unused* local LSP servers=====
+
+-- vim.lsp.config['lua_ls'] = {
+--     cmd = { 'lua-language-server' },
+--     filetypes = { 'lua' },
+--     root_markers = { { '.luarc.json', '.luarc.jsonc' }, '.git' },
+--     capabilities = caps,
+--     settings = {
+--         Lua = {
+--             runtime = { version = 'LuaJIT' },
+--             diagnostics = { globals = { 'vim' } },
+--             workspace = {
+--                 checkThirdParty = false,
+--                 library = vim.api.nvim_get_runtime_file('', true),
+--             },
+--             telemetry = { enable = false },
+--         },
+--     },
+-- }
+
+-- vim.lsp.config['jsonls'] = {
+--     cmd = { 'vscode-json-languageserver', '--stdio' },
+--     filetypes = { 'json', 'jsonc' },
+--     root_markers = { 'package.json', '.git', 'config.jsonc' },
+--     capabilities = caps,
+-- }
