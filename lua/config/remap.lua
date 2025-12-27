@@ -6,10 +6,6 @@ vim.api.nvim_create_autocmd("TermOpen", {
     command = "setlocal nonumber norelativenumber"
 })
 
--- General key mappings
-vim.api.nvim_set_keymap('n', '<leader>ce', ':Copilot enable<CR>', { noremap = true })
-vim.api.nvim_set_keymap('n', '<leader>cd', ':Copilot disable<CR>', { noremap = true })
-vim.api.nvim_set_keymap('i', '<C-L>', '<Plug>(copilot-accept-word)', { noremap = true, silent = true })
 
 -- Move line up in visual mode
 vim.keymap.set("v", "J", ":m '>+1<CR>gv=gv", { noremap = true, silent = true })

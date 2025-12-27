@@ -3,21 +3,33 @@ vim.lsp.config('*', {
 })
 
 vim.diagnostic.config({
-    virtual_text  = true,
+    virtual_lines = true, -- this gets messy on large code base with tons of errors
+    -- Select either virtual lines or text below otherwise it gets messy
+    -- virtual_text = {
+    --     spacing = 4,
+    --     prefix = "●", -- This is fine as a string
+    -- },
+
+    underline = true,
+    update_in_insert = false,
     severity_sort = true,
-    float         = {
+    float = {
         style  = 'minimal',
         border = 'rounded',
         source = 'if_many',
         header = '',
         prefix = '',
     },
-    signs         = {
+    signs = {
         text = {
-            [vim.diagnostic.severity.ERROR] = '✘',
-            [vim.diagnostic.severity.WARN]  = '▲',
-            [vim.diagnostic.severity.HINT]  = '⚑',
-            [vim.diagnostic.severity.INFO]  = '»',
+            [vim.diagnostic.severity.ERROR] = "󰅚 ",
+            [vim.diagnostic.severity.WARN] = "󰀪 ",
+            [vim.diagnostic.severity.INFO] = "󰋽 ",
+            [vim.diagnostic.severity.HINT] = "󰌶 ",
+        },
+        numhl = {
+            [vim.diagnostic.severity.ERROR] = "ErrorMsg",
+            [vim.diagnostic.severity.WARN] = "WarningMsg",
         },
     },
 })
@@ -46,11 +58,11 @@ vim.api.nvim_create_autocmd('LspAttach', {
         map('n', 'gi', vim.lsp.buf.implementation)
         map('n', 'go', vim.lsp.buf.type_definition)
         map('n', 'gr', vim.lsp.buf.references)
-        map('n', 'gs', vim.lsp.buf.signature_help)
+        map('n', '<D-i>', vim.lsp.buf.signature_help)
         map('n', 'gl', vim.diagnostic.open_float)
         map('n', '<F2>', vim.lsp.buf.rename)
-        map({ 'n', 'x' }, '<F3>', function() vim.lsp.buf.format({ async = true }) end)
-        map('n', '<F4>', vim.lsp.buf.code_action)
+        map({ 'n', 'x' }, '<D-S-i>', function() vim.lsp.buf.format({ async = true }) end)
+        map('n', '<D-.>', vim.lsp.buf.code_action)
 
         local excluded_filetypes = {} -- c = true, cpp = true }
         if not client:supports_method('textDocument/willSaveWaitUntil')
