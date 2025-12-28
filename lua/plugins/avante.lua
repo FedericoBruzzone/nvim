@@ -53,12 +53,23 @@ return {
         --         },
         --     },
         -- },
-        provider = "codex",
+        -- provider = "gemini-cli",
+        provider = "copilot",
+        acp_providers = {
+            ["gemini-cli"] = {
+                command = "gemini",
+                args = { "--experimental-acp" },
+                env = {
+                    NODE_NO_WARNINGS = "1",
+                    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY"),
+                },
+            }
+        },
         selector = {
             provider = "telescope",   -- "native"
             provider_opts = {},
             exclude_auto_select = {}, -- List of items to exclude from auto selection
-        }
+        },
     },
     dependencies = {
         "nvim-lua/plenary.nvim",
@@ -91,34 +102,34 @@ return {
             ft = { "markdown", "Avante" },
         },
     },
-    config = function()
-        -- require('avante_lib').load()
-        local config = {
-            -- windows = {
-            --     input = {
-            --         border = "rounded",
-            --         width = 60,
-            --         height = 10,
-            --     },
-            --     output = {
-            --         border = "rounded",
-            --         width = 60,
-            --         height = 20,
-            --     },
-            --     ask = {
-            --         floating = true,
-            --         border = "rounded",
-            --         start_insert = true
-            --     }
-            -- }
-        }
-        local avante = require('avante')
-        avante.setup(config)
-
-        vim.keymap.set({ 'v', 'n' }, '<D-S-b>', function()
-            require('avante').toggle()
-        end, { desc = "Avante: Toggle Assistant" })
-
-        vim.keymap.set({ 'v', 'n' }, '<C-Enter>', "<Cmd>:AvanteEdit<CR>", { desc = "Avante: Edit with Assistant" })
-    end
+    -- config = function()
+    --     require('avante_lib').load()
+    --     local config = {
+    --         windows = {
+    --             input = {
+    --                 border = "rounded",
+    --                 width = 60,
+    --                 height = 10,
+    --             },
+    --             output = {
+    --                 border = "rounded",
+    --                 width = 60,
+    --                 height = 20,
+    --             },
+    --             ask = {
+    --                 floating = true,
+    --                 border = "rounded",
+    --                 start_insert = true
+    --             }
+    --         }
+    --     }
+    --     local avante = require('avante')
+    --     avante.setup(config)
+    --
+    --     vim.keymap.set({ 'v', 'n' }, '<D-S-b>', function()
+    --         require('avante').toggle()
+    --     end, { desc = "Avante: Toggle Assistant" })
+    --
+    -- vim.keymap.set({ 'v', 'n' }, '<C-Enter>', "<Cmd>:AvanteEdit<CR>", { desc = "Avante: Edit with Assistant" })
+    -- end
 }
