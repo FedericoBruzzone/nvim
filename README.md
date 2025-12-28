@@ -7,5 +7,3 @@ Other Neovim setups that have inspired this one include: [jdhao](https://github.
 ## Contact
 
 If you have any questions, suggestions, or feedback, do not hesitate to [contact me](https://federicobruzzone.github.io/).
-
-
