@@ -14,7 +14,7 @@ return {
             completion = { completeopt = "menu,menuone,noinsert" },
             window = {
                 documentation = cmp.config.window.bordered(),
-                completion = cmp.config.window.bordered(),
+                -- completion = cmp.config.window.bordered(),
             },
             mapping = cmp.mapping.preset.insert({
                 ["<CR>"]      = cmp.mapping.confirm({ select = false }),

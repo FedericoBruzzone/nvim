@@ -1,5 +1,5 @@
 -- Set laststatus to 0 to remove the statusline
-vim.opt.laststatus = 2
+vim.opt.laststatus = 3
 -- Set number
 vim.opt.nu = true
 -- Set relativenumber
@@ -53,9 +53,8 @@ vim.opt.updatetime = 50
 -- Highlight current line
 vim.opt.cursorline = true
 -- How and where to highlight the current line
-vim.opt.cursorlineopt="line,number" -- valid values: "line", "number", "both"
+vim.opt.cursorlineopt = "line,number" -- valid values: "line", "number", "both"
 -- Set the listchars option to show whitespace characters
 -- vim.opt.listchars = { lead = '·', tab = '> ', trail = '·', extends = '⟩', precedes = '⟨', nbsp = '␣' }
 -- Show whitespace characters
 -- vim.opt.list = true
-

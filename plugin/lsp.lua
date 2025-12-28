@@ -9,7 +9,6 @@ vim.diagnostic.config({
         spacing = 4,
         prefix = "●", -- This is fine as a string
     },
-
     underline = true,
     update_in_insert = false,
     severity_sort = true,
@@ -30,8 +29,8 @@ vim.diagnostic.config({
         numhl = {
             [vim.diagnostic.severity.ERROR] = "ErrorMsg",
             [vim.diagnostic.severity.WARN] = "WarningMsg",
-        },
-    },
+        }
+    }
 })
 
 local orig = vim.lsp.util.open_floating_preview

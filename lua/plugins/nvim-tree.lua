@@ -26,8 +26,8 @@ return {
                 },
             },
             view = {
-                width = 35,
-                side = "right",
+                width = 25,
+                -- side = "right",
                 -- relativenumber = true,
             },
             renderer = {
