@@ -1,3 +1,4 @@
+-- https://codecompanion.olimorris.dev/
 return {
     "olimorris/codecompanion.nvim",
     dependencies = {
