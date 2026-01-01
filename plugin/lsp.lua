@@ -112,7 +112,7 @@ vim.lsp.config['rust_analyzer'] = {
     capabilities = caps,
     settings = {
         ['rust-analyzer'] = {
-            cargo = { allFeatures = true },
+            -- cargo = { allFeatures = true },
             check = { command = "clippy", }, -- Use Clippy on save
             rustcSource = "discover",        -- To work with rust-src component
             formatting = {

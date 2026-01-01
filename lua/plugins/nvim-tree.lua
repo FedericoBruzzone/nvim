@@ -6,14 +6,6 @@ return {
     dependencies = "nvim-tree/nvim-web-devicons",
     config = function()
         local nvimtree = require("nvim-tree")
-
-        vim.g.loaded_netrw = 1
-        vim.g.loaded_netrwPlugin = 1
-
-        vim.g.netrw_browse_split = 0
-        vim.g.netrw_banner = 0
-        vim.g.netrw_winsize = 25
-
         nvimtree.setup({
             diagnostics = {
                 enable = true,
@@ -26,7 +18,7 @@ return {
                 },
             },
             view = {
-                width = 25,
+                width = 0,
                 -- side = "right",
                 -- relativenumber = true,
             },
@@ -39,6 +31,11 @@ return {
             },
             git = {
                 ignore = false,
+            },
+            actions = {
+                open_file = {
+                    quit_on_open = false, -- Do not close the tree when opening a file
+                },
             },
         })
 
