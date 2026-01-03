@@ -18,7 +18,7 @@ return {
                 },
             },
             view = {
-                width = 0,
+                width = 25,
                 -- side = "right",
                 -- relativenumber = true,
             },
