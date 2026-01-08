@@ -37,13 +37,12 @@ return {
                 "llvm"
             })
 
-            vim.cmd.syntax("off")
-            vim.api.nvim_create_autocmd("BufReadPost", {
+            vim.api.nvim_create_autocmd('FileType', {
                 pattern = { '*' },
                 callback = function()
-                    -- can start a specific treesitter on a specific buffer also
-                    -- vim.treesitter.start(0, "c")
-
+                    if vim.bo.filetype == 'NvimTree' then
+                        return
+                    end
                     -- syntax highlighting, provided by Neovim
                     vim.treesitter.start()
                     -- folds, provided by Neovim
@@ -52,7 +51,6 @@ return {
                     -- indentation, provided by nvim-treesitter
                     vim.bo.indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
                 end,
-                once = true,
             })
         end
     }
