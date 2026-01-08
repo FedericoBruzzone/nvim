@@ -39,7 +39,7 @@ return {
 
             vim.cmd.syntax("off")
             vim.api.nvim_create_autocmd("BufReadPost", {
-                pattern = "*",
+                pattern = { '*' },
                 callback = function()
                     -- can start a specific treesitter on a specific buffer also
                     -- vim.treesitter.start(0, "c")
