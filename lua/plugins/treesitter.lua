@@ -42,7 +42,7 @@ return {
                 pattern  = '*',
                 callback = function()
                     -- syntax highlighting, provided by Neovim
-                    vim.treesitter.start(0, 'c')
+                    vim.treesitter.start()
                     -- folds, provided by Neovim
                     vim.wo.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
                     vim.wo.foldmethod = 'expr'
