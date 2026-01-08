@@ -38,13 +38,11 @@ return {
             })
 
             vim.api.nvim_create_autocmd('FileType', {
-                pattern = { '*' },
+                -- pattern = { 'yml', 'llvm', 'gitcommit', 'c', 'cpp', 'json', 'python' },
+                pattern  = '*',
                 callback = function()
-                    if vim.bo.filetype == 'NvimTree' then
-                        return
-                    end
                     -- syntax highlighting, provided by Neovim
-                    vim.treesitter.start()
+                    vim.treesitter.start(0, 'c')
                     -- folds, provided by Neovim
                     vim.wo.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
                     vim.wo.foldmethod = 'expr'
