@@ -29,6 +29,7 @@ ITEMS=(
   ".agents"
   ".claude"
   ".config/opencode"
+  ".llms"
   "unimi.ovpn"
 )
 
