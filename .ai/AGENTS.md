@@ -15,6 +15,7 @@
 - NEVER add `Co-Authored-By: Claude <noreply@anthropic.com>` or similar AI model attribution to commits
 - Use clear, concise commit messages that explain WHY not WHAT
 - Create new commits rather than amending existing ones
+- NEVER add the body to a commit without explicit user request
 
 ## Communication Style
 

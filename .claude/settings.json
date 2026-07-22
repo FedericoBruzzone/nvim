@@ -6,6 +6,6 @@
   "enabledPlugins": {
     "academic-research-skills@academic-research-skills": true
   },
-  "effortLevel": "max",
+  "effortLevel": "high",
   "model": "sonnet"
 }

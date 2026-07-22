@@ -34,7 +34,8 @@ return {
                 "dockerfile",
                 "gitignore",
                 "astro",
-                "llvm"
+                "llvm",
+                "mlir"
             })
 
             -- Remap to enable/disable treesitter

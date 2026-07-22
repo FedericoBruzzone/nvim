@@ -64,3 +64,4 @@ tags
 # OpenCode metadata (.config/opencode)
 .config/opencode/node_modules/
 .config/opencode/install-counts-cache.json
+.llms/openrouter.txt
