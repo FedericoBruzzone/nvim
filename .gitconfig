@@ -16,18 +16,18 @@
     r = rebase
 
 [core]
-    editor = nvim
+    editor = vim ; nvim
     excludesfile = ~/.gitignore_global
 [difftool]
     prompt = true
-[difftool "nvimdiff"]
-    cmd = "nvim -d \"$LOCAL\" \"$REMOTE\""
 [diff]
-    ; tool = vimdiff
-    tool = nvimdiff
+    tool = vimdiff
+    ; tool = nvimdiff
 [merge]
-    ; tool = vimdiff
-    tool = nvimdiff
+    tool = vimdiff
+    ; tool = nvimdiff
+; [difftool ""]
+;    cmd = "nvim -d \"$LOCAL\" \"$REMOTE\""
 [init]
 	defaultBranch = main
 	templateDir = ~/.git_template
