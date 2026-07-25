@@ -6,4 +6,5 @@
 macos-option-as-alt = left
 keybind = ctrl++=increase_font_size:1
 keybind = ctrl+-=decrease_font_size:1
+font-family = "Monaco"
 

@@ -65,8 +65,8 @@ set nomodeline        " disable modeline
 set splitbelow        " open new split below
 set splitright        " open new split right
 set termguicolors     " enable 24-bit color
-colorscheme industry
 let g:markdown_fenced_languages = ['mlir']
+" colorscheme industry
 
 " ===== REMAP =====
 let g:mapleader = "\<Space>" " set leader key to space
@@ -87,7 +87,7 @@ vnoremap <S-k> :m '<-2<CR>gv=gv    " move line up
 
 nnoremap <leader>s :%s/\<<C-r>=expand('<cword>')<CR>\>//gI<Left><Left><Left>
 
-nnoremap <ESC>u :nohlsearch<CR>    " clear search highlight
+nnoremap <C-c><C-c> :nohlsearch<CR> " clear search highlight
 
 vnoremap <silent> < <gv
 vnoremap <silent> > >gv

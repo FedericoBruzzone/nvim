@@ -23,7 +23,10 @@ print_usage() {
     echo "  emit-llvm <file.c> [LEVEL]             Generate LLVM IR from a C file (default LEVEL: -O0)."
     echo "  llvm-compile <file.ll> [OUT] [LLC_OPT] Compile LLVM IR (.ll/.bc) to an executable using llc and clang (default LLC_OPT: -O0)."
     echo "  clang-link <file.ll> [OUT] [OPT_LEVEL] Compile LLVM IR directly with clang (no llc step, default OPT_LEVEL: -O0)."
-    echo "  check                                  Run the LLVM and Clang check targets."
+    echo "  check-llvm                             Run all LLVM tests (unit + lit)."
+    echo "  check-llvm-unit                        Run only LLVM unit tests."
+    echo "  check-clang                            Run all Clang tests (unit + lit)."
+    echo "  check-clang-unit                       Run only Clang unit tests."
     echo "  clean                                  Clean the build directory."
     echo "  help                                   Show this help message."
     echo ""
@@ -273,9 +276,24 @@ case $COMMAND in
         ${LLVM_DIR}/bin/clang ${OPT_LEVEL} "${INPUT_FILE}" -o "${OUT_NAME}" ${SYSROOT}
         ;;
 
-    check)
-        echo "--- Running check-llvm and check-clang ---"
-        ninja -C "${BUILD_DIR}" check-llvm check-clang
+    check-llvm)
+        echo "--- Running check-llvm ---"
+        ninja -C "${BUILD_DIR}" check-llvm
+        ;;
+
+    check-llvm-unit)
+        echo "--- Running check-llvm-unit ---"
+        ninja -C "${BUILD_DIR}" check-llvm-unit
+        ;;
+
+    check-clang)
+        echo "--- Running check-clang ---"
+        ninja -C "${BUILD_DIR}" check-clang
+        ;;
+
+    check-clang-unit)
+        echo "--- Running check-clang-unit ---"
+        ninja -C "${BUILD_DIR}" check-clang-unit
         ;;
 
     clean)
