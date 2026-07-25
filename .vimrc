@@ -66,6 +66,7 @@ set splitbelow        " open new split below
 set splitright        " open new split right
 set termguicolors     " enable 24-bit color
 colorscheme industry
+let g:markdown_fenced_languages = ['mlir']
 
 " ===== REMAP =====
 let g:mapleader = "\<Space>" " set leader key to space

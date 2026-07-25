@@ -3,8 +3,8 @@ set -euo pipefail
 
 # --- Configuration ---
 REPO_ROOT=${REPO_ROOT:-~/dev/llvm-project}
+BUILD_DIR=${BUILD_DIR:-${REPO_ROOT}/build}
 LLVM_DIR=${LLVM_DIR:-${REPO_ROOT}/build}
-BUILD_DIR=./build
 
 # --- Helper Functions ---
 print_usage() {
@@ -23,6 +23,7 @@ print_usage() {
     echo "  emit-llvm <file.c> [LEVEL]             Generate LLVM IR from a C file (default LEVEL: -O0)."
     echo "  llvm-compile <file.ll> [OUT] [LLC_OPT] Compile LLVM IR (.ll/.bc) to an executable using llc and clang (default LLC_OPT: -O0)."
     echo "  clang-link <file.ll> [OUT] [OPT_LEVEL] Compile LLVM IR directly with clang (no llc step, default OPT_LEVEL: -O0)."
+    echo "  check                                  Run the LLVM and Clang check targets."
     echo "  clean                                  Clean the build directory."
     echo "  help                                   Show this help message."
     echo ""
@@ -52,8 +53,8 @@ case $COMMAND in
     config)
         BUILD_TYPE=${1:-Debug}
         echo "--- Configuring project ---"
-        mkdir -p ${BUILD_DIR}
-        cmake -S llvm -B ${BUILD_DIR} -G Ninja \
+        mkdir -p "${BUILD_DIR}"
+        cmake -S "${REPO_ROOT}/llvm" -B "${BUILD_DIR}" -G Ninja \
             -DLLVM_ENABLE_PROJECTS="clang" \
             -DLLVM_ENABLE_RUNTIMES="" \
             -DLLVM_ENABLE_EH=ON \
@@ -65,12 +66,12 @@ case $COMMAND in
 
     build)
         echo "--- Building project ---"
-        ninja -C ${BUILD_DIR}
+        ninja -C "${BUILD_DIR}"
         ;;
 
     rebuild)
         echo "--- Rebuilding project from scratch ---"
-        rm -rf ${BUILD_DIR}
+        rm -rf "${BUILD_DIR}"
         $0 config
         $0 build
         ;;
@@ -272,9 +273,14 @@ case $COMMAND in
         ${LLVM_DIR}/bin/clang ${OPT_LEVEL} "${INPUT_FILE}" -o "${OUT_NAME}" ${SYSROOT}
         ;;
 
+    check)
+        echo "--- Running check-llvm and check-clang ---"
+        ninja -C "${BUILD_DIR}" check-llvm check-clang
+        ;;
+
     clean)
         echo "--- Cleaning build directory ---"
-        rm -rf ${BUILD_DIR}
+        rm -rf "${BUILD_DIR}"
         ;;
 
 

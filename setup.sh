@@ -19,6 +19,7 @@ ITEMS=(
   ".bin"
   ".zshrc"
   ".vimrc"
+  ".vim"
   ".gitconfig"
   ".gitignore_global"
   ".config/nvim"
