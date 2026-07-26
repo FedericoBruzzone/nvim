@@ -1,8 +1,8 @@
-" source ~/.vim/vim-plug/coc.vim
-
-" call plug#begin('~/.vim/plugged')
-"     Plug 'neoclide/coc.nvim', {'branch': 'release'}
-" call plug#end()
+"source ~/.vim/vim-plug/coc.vim
+"
+"call plug#begin('~/.vim/plugged')
+"    Plug 'neoclide/coc.nvim', {'branch': 'release'}
+"call plug#end()
 
 set nocompatible
 
@@ -91,4 +91,28 @@ nnoremap <C-c><C-c> :nohlsearch<CR> " clear search highlight
 
 vnoremap <silent> < <gv
 vnoremap <silent> > >gv
+ 
+nnoremap <C-b> :Ex<CR>
 
+" ===== GREP SETTINGS =====
+set grepprg=rg\ --vimgrep
+set grepformat=%f:%l:%c:%m
+
+function! GrepKeepPosition(...)
+  let l:win = win_getid()
+  let l:view = winsaveview()
+  let l:buf = bufnr('%')
+
+  silent execute 'grep' join(a:000)
+
+  call win_gotoid(l:win)
+  call winrestview(l:view)
+  execute 'buffer' l:buf
+
+  copen
+endfunction
+
+" nnoremap <leader>g :silent grep <C-R>=expand("<cword>")<CR> \| copen<CR>
+" command! -nargs=+ G silent execute 'grep' <q-args> | copen
+command! -nargs=+ G call GrepKeepPosition(<f-args>)
+nnoremap <leader>g :G <C-R>=expand("<cword>")<CR><CR>
