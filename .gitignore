@@ -65,3 +65,6 @@ tags
 .config/opencode/node_modules/
 .config/opencode/install-counts-cache.json
 .llms/openrouter.txt
+
+# vim
+.vim/pack/
