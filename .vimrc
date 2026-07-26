@@ -112,7 +112,98 @@ function! GrepKeepPosition(...)
   copen
 endfunction
 
-" nnoremap <leader>g :silent grep <C-R>=expand("<cword>")<CR> \| copen<CR>
-" command! -nargs=+ G silent execute 'grep' <q-args> | copen
-command! -nargs=+ G call GrepKeepPosition(<f-args>)
-nnoremap <leader>g :G <C-R>=expand("<cword>")<CR><CR>
+" Grep with a specified pattern and keep the cursor position
+command! -nargs=+ G call GrepKeepPosition(<f-args>) " command! -nargs=+ G silent execute 'grep' <q-args> | copen
+" Grep with the current word under the cursor
+nnoremap <leader>g :G <C-R>=expand("<cword>")<CR><CR> " nnoremap <leader>g :silent grep <C-R>=expand("<cword>")<CR> \| copen<CR>
+
+
+" ===== COPILOT SETTINGS =====
+
+" Disable Copilot by default
+let g:copilot_enabled = 0
+" Enable Copilot for all filetypes
+let g:copilot_filetypes = {
+      \ '*': 1
+      \ }
+" Enable Copilot
+nnoremap <leader>ce :Copilot enable<CR>
+" Disable Copilot
+nnoremap <leader>cd :Copilot disable<CR>
+" Accept Copilot suggestion word by word in insert mode
+inoremap <silent><C-l> <Plug>(copilot-accept-word)
+
+
+
+
+
+" Toggle comments based on filetype
+function! ToggleComment() range
+    let ft = &filetype
+
+    " Comment markers
+    let markers = {
+        \ 'python': '#',
+        \ 'sh': '#',
+        \ 'bash': '#',
+        \ 'vim': '"',
+        \ 'ruby': '#',
+        \ 'perl': '#',
+        \ 'javascript': '//',
+        \ 'typescript': '//',
+        \ 'java': '//',
+        \ 'c': '//',
+        \ 'cpp': '//',
+        \ 'rust': '//',
+        \ 'go': '//',
+        \ 'php': '//',
+        \ 'css': '/*',
+        \ 'html': '<!--',
+        \ 'xml': '<!--'
+        \ }
+
+    if !has_key(markers, ft)
+        echo "Unsupported filetype: " . ft
+        return
+    endif
+
+    let comment = markers[ft]
+
+    let start = a:firstline
+    let end = a:lastline
+
+    " Check if all lines are already commented
+    let all_commented = 1
+
+    for lnum in range(start, end)
+        let line = getline(lnum)
+        if line =~ '^\s*' . escape(comment, '/*') . '\s*'
+            continue
+        else
+            let all_commented = 0
+            break
+        endif
+    endfor
+
+    " Toggle
+    for lnum in range(start, end)
+        let line = getline(lnum)
+
+        if all_commented
+            " Remove comment
+            call setline(
+                \ lnum,
+                \ substitute(line, '^\(\s*\)' . escape(comment, '/*') . '\s\?', '\1', '')
+                \ )
+        else
+            " Add comment
+            call setline(
+                \ lnum,
+                \ substitute(line, '^\s*', '&' . comment . ' ', '')
+                \ )
+        endif
+    endfor
+endfunction
+
+" Visual mode mapping
+vnoremap gcc :call ToggleComment()<CR>
