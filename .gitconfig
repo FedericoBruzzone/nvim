@@ -31,6 +31,8 @@
 [init]
 	defaultBranch = main
 	templateDir = ~/.git_template
+[submodule]
+    recurse = true
 
 ; remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
 ; [remote "origin"]

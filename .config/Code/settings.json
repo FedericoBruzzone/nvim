@@ -166,6 +166,6 @@
     "editor.cursorSmoothCaretAnimation": "on",
     "chat.viewSessions.orientation": "stacked",
     "git.blame.editorDecoration.enabled": false,
-    "workbench.colorTheme": "Gruvbox Dark Hard",
+    "workbench.colorTheme": "Light 2026",
 
 }
