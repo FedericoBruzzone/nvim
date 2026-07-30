@@ -15,10 +15,11 @@ Usage: ${SCRIPT} <command> [options] <name>
 <name>  base name of the main .tex file (without extension)
 
 Commands:
-  compile                     pdflatex → bibtex → pdflatex × 2
-  force                       compile with -interaction=nonstopmode
-  figs                        compile all .tex files in --figs-dir
-  all                         figs then compile
+  build-clean                 build then clean (PDF kept)
+  build                       pdflatex → bibtex → pdflatex × 2
+  force                       build with -interaction=nonstopmode
+  figs                        build all .tex files in --figs-dir
+  all                         figs then build 
   interactive                 latexmk -pvc (live preview)
   clean                       remove temp files (PDF kept)
   clean-pdf                   remove temp files and PDF
@@ -31,8 +32,9 @@ Options:
   -h, --help        show this help and exit
 
 Examples:
-  ${SCRIPT} compile mypaper
-  ${SCRIPT} compile --bbl mypaper.short.bbl mypaper
+  ${SCRIPT} build-and-clean mypaper
+  ${SCRIPT} build mypaper
+  ${SCRIPT} build --bbl mypaper.short.bbl mypaper
   ${SCRIPT} diff mypaper ../v1 mypaper-v1
   ${SCRIPT} diff --bbl diff.short.bbl mypaper ../v1 mypaper-v1
 EOF
@@ -64,7 +66,7 @@ DIFF_OLD_DIR=""
 DIFF_OLD_NAME=""
 
 case "${COMMAND}" in
-    compile|force|figs|all|interactive|clean|clean-pdf)
+    build-clean|build|force|figs|all|interactive|clean|clean-pdf)
         [[ ${#POSITIONAL[@]} -ge 2 ]] || die "'${COMMAND}' requires <name>"
         NAME="${POSITIONAL[1]%.tex}"
         ;;
@@ -108,7 +110,7 @@ _clean_dir() {    # $1 = directory path (no trailing slash needed)
 }
 
 # ── commands ──────────────────────────────────────────────────────────────────
-do_compile() {
+do_build() {
     local nonstop="${1}"  # "true" | "false"
     local pdflatex_fn
     [[ "${nonstop}" == "true" ]] && pdflatex_fn=_pdflatex_nonstop || pdflatex_fn=_pdflatex
@@ -167,6 +169,13 @@ do_clean_pdf() {
     fi
 }
 
+do_build_clean() {
+    local status=0
+    do_build false || status=$?
+    do_clean
+    return "${status}"
+}
+
 do_diff() {
     local new_name="${NAME}"
     local old_dir
@@ -199,10 +208,11 @@ do_diff() {
 
 # ── dispatch ──────────────────────────────────────────────────────────────────
 case "${COMMAND}" in
-    compile)     do_compile false ;;
-    force)       do_compile true  ;;
+    build-clean) do_build_clean ;;
+    build)       do_build false ;;
+    force)       do_build true  ;;
     figs)        do_figs           ;;
-    all)         do_figs; do_compile false ;;
+    all)         do_figs; do_build false ;;
     interactive) do_interactive    ;;
     clean)       do_clean          ;;
     clean-pdf)   do_clean_pdf      ;;

@@ -159,7 +159,8 @@ function! ToggleComment() range
         \ 'php': '//',
         \ 'css': '/*',
         \ 'html': '<!--',
-        \ 'xml': '<!--'
+        \ 'xml': '<!--',
+        \ 'tex': '%',
         \ }
 
     if !has_key(markers, ft)
@@ -205,5 +206,6 @@ function! ToggleComment() range
     endfor
 endfunction
 
-" Visual mode mapping
 vnoremap gcc :call ToggleComment()<CR>
+nnoremap gcc :call ToggleComment()<CR>
+

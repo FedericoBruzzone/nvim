@@ -52,6 +52,9 @@ print_usage() {
     echo "  clang-format [COMMIT]                      Format changed files vs a git commit."
     echo "  clang-tidy [COMMIT]                        Run clang-tidy on changed files vs a git commit."
     echo "  create-clangd                              Create a .clangd configuration file."
+    echo "  annotate-ir-tree <dir> [--dry-run]         Rename subdirectories of a --mlir-print-ir-tree-dir"
+    echo "                                              dump to append the range of root-level pass steps"
+    echo "                                              (e.g. matmul_dispatch_0 -> matmul_dispatch_0__steps37-38)."
     echo "  show-config                                Show current configuration and environment variables."
     echo "  clean                                      Clean the build directory."
     echo "  help                                       Show this help message."
@@ -341,6 +344,68 @@ CompileFlags:
   CompilationDatabase: ${BUILD_DIR}/
 EOL
         echo "[iree-helper] .clangd file created with compilation database path: ${BUILD_DIR}/"
+        ;;
+
+    annotate-ir-tree)
+        if [ -z "${1:-}" ]; then
+            echo "[iree-helper] Error: Missing directory argument for 'annotate-ir-tree' command."
+            print_usage
+            exit 1
+        fi
+
+        DRY_RUN=false
+        TREE_DIR=""
+        for arg in "$@"; do
+            case "$arg" in
+                --dry-run) DRY_RUN=true ;;
+                *) TREE_DIR="$arg" ;;
+            esac
+        done
+
+        if [ ! -d "$TREE_DIR" ]; then
+            echo "[iree-helper] Error: '${TREE_DIR}' is not a directory."
+            exit 1
+        fi
+
+        echo "[iree-helper] Annotating IR tree dump under ${TREE_DIR}$([ "$DRY_RUN" = true ] && echo ' (dry run)')"
+
+        # Every dumped file is named "<n>_<...>_<passName>.mlir" where the leading
+        # number is the counter of the top-level module operation at the time the
+        # file was written (see mlir/lib/Pass/IRPrinting.cpp:getOpAndSymbolNames):
+        # only the operation actually targeted by a pass has its own counter
+        # incremented, ancestor counters are read as-is. So the leading number of
+        # any file anywhere under a subdirectory always matches a root-level dump
+        # file with that same number, and min/max of it over a subtree gives the
+        # range of root-level steps that subtree was produced during.
+        while IFS= read -r dir; do
+            base="$(basename "$dir")"
+
+            # Skip if already annotated (idempotent re-runs).
+            if [[ "$base" =~ __steps[0-9]+(-[0-9]+)?$ ]]; then
+                continue
+            fi
+
+            steps=()
+            while IFS= read -r f; do
+                n="$(basename "$f" | grep -oE '^[0-9]+' || true)"
+                [ -n "$n" ] && steps+=("$n")
+            done < <(find "$dir" -name '*.mlir')
+
+            [ "${#steps[@]}" -eq 0 ] && continue
+
+            min=$(printf '%s\n' "${steps[@]}" | sort -n | head -1)
+            max=$(printf '%s\n' "${steps[@]}" | sort -n | tail -1)
+            suffix="__steps${min}"
+            [ "$min" != "$max" ] && suffix="__steps${min}-${max}"
+
+            new_dir="$(dirname "$dir")/${base}${suffix}"
+            if [ "$DRY_RUN" = true ]; then
+                echo "[iree-helper]  would rename: ${base} -> ${base}${suffix}"
+            else
+                mv "$dir" "$new_dir"
+                echo "[iree-helper]  renamed: ${base} -> ${base}${suffix}"
+            fi
+        done < <(find "$TREE_DIR" -mindepth 1 -depth -type d)
         ;;
 
     show-config)
