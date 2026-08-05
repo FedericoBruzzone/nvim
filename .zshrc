@@ -225,6 +225,10 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
 fi
 # }
 
+# node configuration {
+export NODE_TLS_REJECT_UNAUTHORIZED=0
+# }
+
 # # llvm@16 configuration {
 #  # To use the bundled libc++ please add the following LDFLAGS:
 #  export LDFLAGS="-L/usr/local/opt/llvm@16/lib/c++ -Wl,-rpath,/usr/local/opt/llvm@16/lib/c++"

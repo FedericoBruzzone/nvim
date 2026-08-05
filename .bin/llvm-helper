@@ -2,9 +2,13 @@
 set -euo pipefail
 
 # --- Configuration ---
+# NOTE: defaults to a build dir distinct from mlir-helper's (${REPO_ROOT}/build)
+# on purpose -- llvm-helper's `config` doesn't enable mlir or integration
+# tests, so sharing mlir-helper's build dir would silently reconfigure away
+# the MLIR build. Pass BUILD_DIR explicitly if you really want to share one.
 REPO_ROOT=${REPO_ROOT:-~/dev/llvm-project}
-BUILD_DIR=${BUILD_DIR:-${REPO_ROOT}/build}
-LLVM_DIR=${LLVM_DIR:-${REPO_ROOT}/build}
+BUILD_DIR=${BUILD_DIR:-${REPO_ROOT}/build-llvm-only}
+LLVM_DIR=${LLVM_DIR:-${REPO_ROOT}/build-llvm-only}
 
 # --- Helper Functions ---
 print_usage() {

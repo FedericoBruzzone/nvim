@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<EOF
+Usage: folder-sync-git-svn <push|pull> <git-dir> <svn-dir>
+       folder-sync-git-svn --help
+
+File-level folder sync between a git working tree and an SVN checkout.
+No SVN command is run: it only rsyncs, then prints the next steps.
+
+  push  rsync git -> svn (deletes svn files no longer in git)
+  pull  rsync svn -> git (never deletes git-only files)
+EOF
+}
+
+case "${1:-}" in
+  --help|-h)
+    usage
+    exit 0
+    ;;
+esac
+
+[ $# -ge 3 ] || { usage >&2; exit 1; }
+mode=$1
+src=$2
+dst=$3
+
+EXCLUDES=(--exclude='.git' --exclude='.svn' --exclude='.DS_Store'
+          --exclude='*.aux' --exclude='*.bbl' --exclude='*.blg'
+          --exclude='*.log' --exclude='*.fdb_latexmk' --exclude='*.fls'
+          --exclude='*.out' --exclude='/*.pdf' --exclude='build' --exclude='x')
+
+case "$mode" in
+  push)
+    rsync -a --delete "${EXCLUDES[@]}" "$src/" "$dst/"
+    echo "files synced to svn. next:"
+    echo "  svn add \"$dst\" --force --parents && svn commit -m \"Sync from git ($(basename "$src"))\" \"$dst\""
+    ;;
+  pull)
+    echo "run first, if you want the latest svn state:"
+    echo "  svn update \"$dst\""
+    rsync -a "${EXCLUDES[@]}" "$dst/" "$src/"
+    git -C "$src" status --short
+    echo "files synced from svn; commit the result in git yourself"
+    ;;
+  *)
+    usage >&2; exit 1 ;;
+esac

@@ -58,6 +58,8 @@ case $COMMAND in
             -DLLVM_ENABLE_PROJECTS="mlir;clang" \
             -DLLVM_TARGETS_TO_BUILD="AArch64;host" \
             -DMLIR_INCLUDE_INTEGRATION_TESTS=ON \
+            -DARM_EMULATOR_EXECUTABLE=env \
+            -DMLIR_RUN_ARM_I8MM_TESTS=ON \
             -DCMAKE_C_COMPILER=/usr/bin/clang \
             -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
             -DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path) \

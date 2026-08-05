@@ -9,7 +9,7 @@
     // Inline suggest is used to show code completion suggestions in the editor
     "editor.inlineSuggest.enabled": true,
     // Set font size
-    "editor.fontFamily": "Monaco", // DEFAULT: Menlo, ALTERNATIVE: Monaco
+    "editor.fontFamily": "Iosevka", // DEFAULT: Menlo, ALTERNATIVE: Monaco
     // Relative line numbers
     "editor.lineNumbers": "relative",
     // Set the line height 
@@ -138,6 +138,28 @@
     "[typst-code]": {
         "editor.wordSeparators": "`~!@#$%^&*()=+[{]}\\|;:'\",.<>/?"
     },
+
+
+    "workbench.colorCustomizations": {
+        "terminal.foreground": "#ebdbb2",
+        "panel.background": "#000000",
+        "terminal.background": "#000000",
+        "editor.background": "#000000",
+        "sideBar.background": "#000000",
+        "tab.activeBackground": "#000000",
+        "tab.activeBorderTop": "#3c3836",
+        "tab.activeBorder": "#000000",
+        "tab.border": "#3c3836",
+        "tab.hoverBackground": "#000000",
+        "statusBar.background": "#000000",
+        "activityBar.background": "#000000",
+        "titleBar.activeBackground": "#000000",
+        "titleBar.inactiveBackground": "#000000",
+        "quickInputList.focusBackground": "#000000",
+        "editorGroupHeader.tabsBackground": "#000000",
+        "editorLineNumber.activeForeground": "#ebdbb2"
+    },
+
     "editor.inlayHints.enabled": "on",
     "gitlens.hovers.currentLine.over": "line",
     "tinymist.preview.refresh": "onSave",
@@ -150,9 +172,6 @@
     "githubPullRequests.pullBranch": "never",
     "cmake.configureOnEdit": false,
     "cmake.configureOnOpen": false,
-    // "vscode_custom_css.imports": [
-    //     "file:////Users/federicobruzzone/dev/dotfiles/.config/Code/fcb.css"
-    // ],
 
 
 
@@ -166,6 +185,6 @@
     "editor.cursorSmoothCaretAnimation": "on",
     "chat.viewSessions.orientation": "stacked",
     "git.blame.editorDecoration.enabled": false,
-    "workbench.colorTheme": "Light 2026",
-
+    "workbench.experimental.modernUI": true,
+    "workbench.colorTheme": "Gruvbox Dark Hard",
 }
