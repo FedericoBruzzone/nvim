@@ -2,13 +2,21 @@
 set -euo pipefail
 
 # --- Configuration ---
-# NOTE: defaults to a build dir distinct from mlir-helper's (${REPO_ROOT}/build)
-# on purpose -- llvm-helper's `config` doesn't enable mlir or integration
-# tests, so sharing mlir-helper's build dir would silently reconfigure away
-# the MLIR build. Pass BUILD_DIR explicitly if you really want to share one.
 REPO_ROOT=${REPO_ROOT:-~/dev/llvm-project}
-BUILD_DIR=${BUILD_DIR:-${REPO_ROOT}/build-llvm-only}
-LLVM_DIR=${LLVM_DIR:-${REPO_ROOT}/build-llvm-only}
+BUILD_DIR=${BUILD_DIR:-${REPO_ROOT}/build}
+LLVM_DIR=${LLVM_DIR:-${REPO_ROOT}/build}
+
+# llvm-helper's `config` doesn't enable mlir or integration tests. If
+# BUILD_DIR already has an MLIR build in it (e.g. set up by mlir-helper),
+# reconfiguring here would silently drop MLIR from it. Refuse instead.
+guard_against_mlir_build_dir() {
+    if [ -f "${BUILD_DIR}/CMakeCache.txt" ] && grep -q 'LLVM_ENABLE_PROJECTS:STRING=.*mlir' "${BUILD_DIR}/CMakeCache.txt" 2>/dev/null; then
+        echo "Error: ${BUILD_DIR} is configured with MLIR enabled (likely via mlir-helper)."
+        echo "llvm-helper's 'config' does not build mlir, so proceeding would silently drop it."
+        echo "Use mlir-helper for this build dir, or set BUILD_DIR to a different path."
+        exit 1
+    fi
+}
 
 # --- Helper Functions ---
 print_usage() {
@@ -58,6 +66,7 @@ shift # Remove the command from the arguments list
 
 case $COMMAND in
     config)
+        guard_against_mlir_build_dir
         BUILD_TYPE=${1:-Debug}
         echo "--- Configuring project ---"
         mkdir -p "${BUILD_DIR}"
@@ -77,6 +86,7 @@ case $COMMAND in
         ;;
 
     rebuild)
+        guard_against_mlir_build_dir
         echo "--- Rebuilding project from scratch ---"
         rm -rf "${BUILD_DIR}"
         $0 config
