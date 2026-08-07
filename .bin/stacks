@@ -1,0 +1,1372 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- Configuration ---
+# `stacks` is a plain-markdown work tracker for multi-repo work. The vault
+# (STACKS_DIR) holds only notes and tasks; the code stays in its own git repos,
+# which may live anywhere -- each project page records its repo's path in
+# frontmatter, so nothing here assumes a shared parent directory. Every command
+# that touches a tracked repo is strictly read-only: no fetch, no pull, no
+# checkout, ever.
+#
+# Written for bash 3.2 and a BSD userland (macOS): no associative arrays, no
+# mapfile, no globstar, `stat -f`, `date -v`.
+STACKS_DIR=${STACKS_DIR:-~/dev/stacks}
+STACKS_EDITOR=${STACKS_EDITOR:-${EDITOR:-nvim}}
+STACKS_PR_TTL=${STACKS_PR_TTL:-900}
+# Landed work is immutable history, so it is cached far longer and capped --
+# raise the limit if you want the full record in the page.
+STACKS_MERGED_TTL=${STACKS_MERGED_TTL:-86400}
+STACKS_MERGED_LIMIT=${STACKS_MERGED_LIMIT:-25}
+
+# Expand a leading ~ (the default above is literal when it comes from env).
+case "$STACKS_DIR" in "~"*) STACKS_DIR="$HOME${STACKS_DIR#\~}" ;; esac
+
+CACHE_DIR="${STACKS_DIR}/.stacks/cache"
+TAB=$(printf '\t')
+TODAY=$(date +%F)
+
+# --- Helper Functions ---
+print_usage() {
+    echo "Usage: $0 <command> [arguments]"
+    echo ""
+    echo "Commands:"
+    echo "  init                       Create the vault skeleton. Idempotent, never overwrites."
+    echo "  new [path] [--name <n>]    Track a git repo (default: the current directory)."
+    echo "  note topic/<slug>          Scaffold topics/<slug>.md."
+    echo "  note meeting/<slug>        Scaffold meetings/<date>-<slug>.md."
+    echo "  today [--refresh]          Open today's daily note (creates it with an agenda snapshot)."
+    echo "  todo [filters]             Aggregate open tasks across the vault."
+    echo "  sync [project]             Pull branch state, your PRs, reviews requested of you"
+    echo "                             and your issues; regenerate DASHBOARD.md and page blocks."
+    echo "  open <project> [what]      Open a project's TASKS.md (default), NOTES.md or README.md."
+    echo "  doctor                     Report broken links, unknown @projects, stale repo paths."
+    echo "  help                       Show this help message."
+    echo ""
+    echo "Task syntax (tasks live in projects/<name>/TASKS.md):"
+    echo "  - [ ] title @project #tag due:YYYY-MM-DD !N     open"
+    echo "  - [~] ...                                       in progress"
+    echo "  - [!] ...                                       blocked"
+    echo "  - [x] ...                                       done"
+    echo ""
+    echo "Filters for 'todo':"
+    echo "  --project <name>   Only tasks tagged @<name>."
+    echo "  --tag <name>       Only tasks tagged #<name>."
+    echo "  --state <s>        open (default), wip, blocked, done, all."
+    echo "  --due [DATE]       Only tasks due on or before DATE (default: today+7)."
+    echo "  --overdue          Only tasks due before today."
+    echo "  --plain            Machine-readable TSV instead of a grouped report."
+    echo ""
+    echo "Environment:"
+    echo "  STACKS_DIR      Path to the vault             (default: ~/dev/stacks)"
+    echo "  STACKS_EDITOR   Editor to use                 (default: \$EDITOR, else nvim)"
+    echo "  STACKS_PR_TTL   GitHub PR cache TTL, seconds  (default: 900)"
+    echo "  STACKS_MERGED_TTL    Landed-PR cache TTL, seconds  (default: 86400)"
+    echo "  STACKS_MERGED_LIMIT  Landed PRs shown per project  (default: 25)"
+}
+
+die() {
+    echo "stacks: $*" >&2
+    exit 1
+}
+
+warn() {
+    echo "stacks: $*" >&2
+}
+
+require_vault() {
+    [ -d "${STACKS_DIR}/projects" ] || die "no vault at ${STACKS_DIR} (run: stacks init)"
+}
+
+# Shorten an absolute path back to ~/... for storage in frontmatter.
+tildify() {
+    case "$1" in
+        "$HOME"/*) printf '~%s\n' "${1#$HOME}" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+untildify() {
+    case "$1" in
+        "~"*) printf '%s\n' "$HOME${1#\~}" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+# Each project is a directory, so per-project assets (PDFs, diagrams, scratch
+# notes) sit next to the page and can be linked with a bare filename. The page
+# is README.md because GitHub renders it automatically when you open the folder.
+project_page() {
+    printf '%s/projects/%s/README.md\n' "$STACKS_DIR" "$1"
+}
+
+project_dir() {
+    printf '%s/projects/%s\n' "$STACKS_DIR" "$1"
+}
+
+# Read one key out of a file's YAML frontmatter. Stops at the closing '---' so a
+# 'repo:' mentioned in body prose cannot spoof the real value.
+fm_get() {
+    awk -v k="$2" '
+      NR==1 && $0 != "---" { exit 1 }
+      NR>1 && $0 == "---"  { exit }
+      NR>1 {
+        i = index($0, ":")
+        if (i && substr($0, 1, i-1) == k) {
+          v = substr($0, i+1)
+          sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v)
+          print v; exit
+        }
+      }' "$1"
+}
+
+# owner/name of a repo's upstream, falling back to origin. Handles git@,
+# https:// and ssh:// URL shapes. Only a default: the collaboration remote is
+# not always called 'upstream' (it may be a person's name), so the slug written
+# into frontmatter is editable and, once edited, wins -- see repo_slugs().
+repo_slug() {
+    local dir=$1 r url
+    for r in upstream origin; do
+        url=$(git -C "$dir" remote get-url "$r" 2>/dev/null) || continue
+        url=${url%.git}
+        url=${url##*github.com[:/]}
+        printf '%s\n' "$url"
+        return 0
+    done
+    return 1
+}
+
+# Every owner/name this repo actually has a remote for. Used to validate a
+# hand-edited frontmatter slug: anything in this list is a deliberate choice,
+# anything outside it is stale.
+repo_slugs() {
+    git -C "$1" remote -v 2>/dev/null \
+        | awk '{ print $2 }' \
+        | sed 's/\.git$//; s|.*github\.com[:/]||' \
+        | sort -u
+}
+
+# The same list as a JSON array, for filtering GitHub search results. Issues and
+# review requests may sit on any remote of a repo (issues on your fork, PRs on
+# the upstream), so matching a single slug drops them on the floor.
+repo_slugs_json() {
+    repo_slugs "$1" | jq -R . | jq -s . 2>/dev/null || echo "[]"
+}
+
+# The slug sync should actually query: the page's, if it names a real remote;
+# otherwise the derived default.
+effective_slug() {
+    local dir=$1 page=$2 want derived
+    want=$(fm_get "$page" slug 2>/dev/null || echo "")
+    derived=$(repo_slug "$dir" || echo "")
+    if [ -n "$want" ] && [ "$want" != "unknown" ]; then
+        if repo_slugs "$dir" | grep -qx "$want"; then
+            printf '%s\n' "$want"
+            return 0
+        fi
+        warn "${page##*/}: slug '${want}' matches no remote of ${dir}; using '${derived}'"
+    fi
+    printf '%s\n' "$derived"
+}
+
+# Resolve a project name to its repo directory, verifying the repo is still there.
+resolve_repo() {
+    local page dir
+    page=$(project_page "$1")
+    [ -f "$page" ] || { warn "$1: no such project page"; return 1; }
+    dir=$(fm_get "$page" repo) || { warn "$1: page has no 'repo:' frontmatter"; return 1; }
+    dir=$(untildify "$dir")
+    [ -d "$dir/.git" ] || { warn "$1: no git repo at $dir (run: stacks doctor)"; return 1; }
+    printf '%s\n' "$dir"
+}
+
+# Your branch names already encode the PR number for review branches, so most
+# lookups need no network call at all.
+branch_pr_number() {
+    case "$1" in
+        pr/*/[0-9]*) printf '%s\n' "${1##*/}" ;;
+        pr-[0-9]*)   printf '%s\n' "${1#pr-}" ;;
+    esac
+}
+
+# One `gh pr list` per repo, cached. Per-branch lookups would cost ~1.4s each,
+# which is 47s on a checkout with 34 branches.
+prs_for_repo() {
+    local slug=$1 cache mtime age
+    cache="${CACHE_DIR}/prs-${slug//\//-}.json"
+    if [ -f "$cache" ]; then
+        mtime=$(stat -f %m "$cache")
+        age=$(( $(date +%s) - mtime ))
+        if [ "$age" -lt "$STACKS_PR_TTL" ]; then
+            cat "$cache"
+            return 0
+        fi
+    fi
+    mkdir -p "$CACHE_DIR"
+    if gh pr list --repo "$slug" --author "@me" --state open --limit 200 \
+         --json number,title,headRefName,url,isDraft,reviewDecision,updatedAt > "${cache}.tmp" 2>/dev/null; then
+        mv "${cache}.tmp" "$cache"
+        cat "$cache"
+    else
+        rm -f "${cache}.tmp"
+        [ -f "$cache" ] && { cat "$cache"; return 0; }
+        echo "[]"
+        return 1
+    fi
+}
+
+# Landed and abandoned work. Separate cache and TTL from the open-PR list: a
+# merged PR never changes, so re-fetching it every 15 minutes is waste.
+closed_prs_for_repo() {
+    local slug=$1 cache mtime age
+    cache="${CACHE_DIR}/closed-${slug//\//-}.json"
+    if [ -f "$cache" ]; then
+        mtime=$(stat -f %m "$cache")
+        age=$(( $(date +%s) - mtime ))
+        if [ "$age" -lt "$STACKS_MERGED_TTL" ]; then
+            cat "$cache"
+            return 0
+        fi
+    fi
+    mkdir -p "$CACHE_DIR"
+    if gh pr list --repo "$slug" --author "@me" --state closed --limit 300 \
+         --json number,title,url,headRefName,mergedAt,closedAt > "${cache}.tmp" 2>/dev/null; then
+        mv "${cache}.tmp" "$cache"
+        cat "$cache"
+    else
+        rm -f "${cache}.tmp"
+        [ -f "$cache" ] && { cat "$cache"; return 0; }
+        echo "[]"
+        return 1
+    fi
+}
+
+# Work that is aimed at you rather than authored by you: review requests and
+# issues. One global search per kind, cached, rather than one query per tracked
+# repo -- the result set is small and this keeps `sync` O(1) in project count.
+# Callers filter the result by repo slug.
+gh_search() {
+    local kind=$1 cache mtime age ok=1 ttl=$STACKS_PR_TTL
+    # Closed history is immutable; only the open queries need a short TTL.
+    case "$kind" in issues-closed) ttl=$STACKS_MERGED_TTL ;; esac
+    cache="${CACHE_DIR}/search-${kind}.json"
+    if [ -f "$cache" ]; then
+        mtime=$(stat -f %m "$cache")
+        age=$(( $(date +%s) - mtime ))
+        if [ "$age" -lt "$ttl" ]; then
+            cat "$cache"
+            return 0
+        fi
+    fi
+    mkdir -p "$CACHE_DIR"
+    case "$kind" in
+        review-requested)
+            gh search prs --review-requested=@me --state=open --limit 100 \
+                --json repository,number,title,author,url,updatedAt,isDraft \
+                > "${cache}.tmp" 2>/dev/null && ok=0
+            ;;
+        issues)
+            # Assigned and authored, merged: 'involves:@me' would also drag in
+            # every issue you have merely commented on, which on llvm is noise.
+            local a b
+            a=$(gh search issues --assignee=@me --state=open --limit 100 \
+                  --json repository,number,title,url,updatedAt 2>/dev/null || echo "[]")
+            b=$(gh search issues --author=@me --state=open --limit 100 \
+                  --json repository,number,title,url,updatedAt 2>/dev/null || echo "[]")
+            if printf '%s\n%s\n' "$a" "$b" \
+                 | jq -s 'add | unique_by(.url)' > "${cache}.tmp" 2>/dev/null; then
+                ok=0
+            fi
+            ;;
+        mentions)
+            # Being pinged in a thread is how review actually gets asked for
+            # most of the time; a formal review request is the exception.
+            local p i
+            p=$(gh search prs --mentions=@me --state=open --limit 100 \
+                  --json repository,number,title,url,author,updatedAt 2>/dev/null || echo "[]")
+            i=$(gh search issues --mentions=@me --state=open --limit 100 \
+                  --json repository,number,title,url,author,updatedAt 2>/dev/null || echo "[]")
+            if printf '%s\n%s\n' \
+                 "$(printf '%s' "$p" | jq -c 'map(. + {kind:"pr"})')" \
+                 "$(printf '%s' "$i" | jq -c 'map(. + {kind:"issue"})')" \
+                 | jq -s 'add | unique_by(.url)' > "${cache}.tmp" 2>/dev/null; then
+                ok=0
+            fi
+            ;;
+        issues-closed)
+            local ca cb
+            ca=$(gh search issues --assignee=@me --state=closed --limit 100 \
+                   --json repository,number,title,url,closedAt 2>/dev/null || echo "[]")
+            cb=$(gh search issues --author=@me --state=closed --limit 100 \
+                   --json repository,number,title,url,closedAt 2>/dev/null || echo "[]")
+            if printf '%s\n%s\n' "$ca" "$cb" \
+                 | jq -s 'add | unique_by(.url)' > "${cache}.tmp" 2>/dev/null; then
+                ok=0
+            fi
+            ;;
+    esac
+    if [ "$ok" -eq 0 ]; then
+        mv "${cache}.tmp" "$cache"
+        cat "$cache"
+    else
+        rm -f "${cache}.tmp"
+        [ -f "$cache" ] && { cat "$cache"; return 0; }
+        echo "[]"
+    fi
+}
+
+# Every markdown file that may contain tasks. DASHBOARD.md and README.md are
+# excluded: one is generated, the other documents the syntax.
+vault_files() {
+    # Only the vault's own README is excluded -- each project's page IS a
+    # README.md and must be scanned, since that is where tasks live.
+    find "$STACKS_DIR" -name '*.md' \
+        -not -path '*/.stacks/*' \
+        -not -path "${STACKS_DIR}/README.md" \
+        -not -name 'DASHBOARD.md' 2>/dev/null | sort
+}
+
+# Emit every task as TSV: state, prio, due, project, tags, title, file, line.
+# Unset priority/due get sentinels so they sort last.
+scan_tasks() {
+    local want=$1; shift
+    [ $# -gt 0 ] || return 0
+    # Only @tokens naming a real project page are project references; anything
+    # else ("ask @banach-space about it") is ordinary prose and stays in the
+    # title, rather than silently vanishing into a project that doesn't exist.
+    local known
+    known=",$(list_projects | tr '\n' ',')"
+    awk -v want="$want" -v known="$known" '
+      # A task written anywhere under projects/<name>/ belongs to <name> unless
+      # it says otherwise, so you never retype @llvm-project on its own page.
+      FNR==1 {
+        fence = 0
+        defproj = ""
+        if (match(FILENAME, /\/projects\/[^\/]+\//))
+          defproj = substr(FILENAME, RSTART + 10, RLENGTH - 11)
+      }
+      /^[ \t]*(```|~~~)/ { fence = !fence; next }
+      fence { next }
+      {
+        # Anchored at line start: "see the - [ ] convention" mid-prose never matches.
+        if (!match($0, /^[ \t]*[-*+][ \t]+\[[ xX~!]\][ \t]+/)) next
+        pre  = substr($0, RSTART, RLENGTH)
+        body = substr($0, RSTART + RLENGTH)
+        match(pre, /\[[ xX~!]\]/)
+        state = substr(pre, RSTART + 1, 1)
+        if (state == "X") state = "x"
+        if (state == " ") state = "o"
+
+        if (want != "all") {
+          if (want == "open"    && state != "o" && state != "~" && state != "!") next
+          if (want == "wip"     && state != "~") next
+          if (want == "blocked" && state != "!") next
+          if (want == "done"    && state != "x") next
+        }
+
+        prio = ""; due = ""; proj = ""; tags = ""; title = ""
+        n = split(body, w, /[ \t]+/)
+        for (i = 1; i <= n; i++) {
+          if      (w[i] ~ /^![0-9]+$/)                                        prio = substr(w[i], 2)
+          else if (w[i] ~ /^due:[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) due  = substr(w[i], 5)
+          else if (w[i] ~ /^@[A-Za-z0-9._-]+$/ && index(known, "," substr(w[i], 2) ",")) proj = substr(w[i], 2)
+          else if (w[i] ~ /^#[A-Za-z0-9][A-Za-z0-9._\/-]*$/)                  tags = tags (tags == "" ? "" : ",") substr(w[i], 2)
+          else if (w[i] != "")                                                title = title (title == "" ? "" : " ") w[i]
+        }
+        if (proj == "") proj = defproj
+
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+               state, (prio == "" ? "9" : prio), (due == "" ? "9999-99-99" : due),
+               (proj == "" ? "~none" : proj), (tags == "" ? "-" : tags), title, FILENAME, FNR
+      }' "$@"
+}
+
+sort_tasks() {
+    # LC_ALL=C so the '~none' sentinel really does collate after every real
+    # project name -- under a UTF-8 locale '~' is ignored and it sorts first.
+    LC_ALL=C sort -t"$TAB" -k4,4 -k2,2n -k3,3
+}
+
+# Replace the content between <!-- stacks:begin ID --> / <!-- stacks:end ID -->,
+# preserving surrounding prose byte-for-byte. Writes to a temp file and mv's, so
+# an interrupt cannot truncate a page. Missing markers = skip, never append.
+replace_block() {
+    local target=$1 id=$2 newfile=$3 tmp rc=0
+    tmp=$(mktemp "${TMPDIR:-/tmp}/stacks.XXXXXX")
+    # Multi-line content must reach awk via getline: BSD awk rejects newlines in -v.
+    awk -v id="$id" -v newfile="$newfile" '
+      $0 == "<!-- stacks:begin " id " -->" {
+          print; found = 1; skip = 1
+          while ((getline l < newfile) > 0) print l
+          close(newfile); next
+      }
+      $0 == "<!-- stacks:end " id " -->" { print; skip = 0; next }
+      skip { next }
+      { print }
+      END { if (!found) exit 3 }
+    ' "$target" > "$tmp" || rc=$?
+    case $rc in
+        0) mv "$tmp" "$target" ;;
+        3) rm -f "$tmp"; warn "no '$id' block in ${target##*/}; skipping"; return 0 ;;
+        *) rm -f "$tmp"; return 1 ;;
+    esac
+}
+
+list_projects() {
+    local f name
+    [ -d "${STACKS_DIR}/projects" ] || return 0
+    for f in "${STACKS_DIR}"/projects/*/; do
+        f=${f%/}
+        [ -f "$f/README.md" ] || continue
+        printf '%s\n' "${f##*/}"
+    done
+}
+
+# Human-readable state marker for reports.
+state_marker() {
+    case "$1" in
+        o) printf '[ ]' ;;
+        '~') printf '[~]' ;;
+        '!') printf '[!]' ;;
+        x) printf '[x]' ;;
+        *) printf '[?]' ;;
+    esac
+}
+
+# --- Commands ---
+
+cmd_init() {
+    echo "--- Creating vault at ${STACKS_DIR} ---"
+    mkdir -p "${STACKS_DIR}/projects" "${STACKS_DIR}/daily" \
+             "${STACKS_DIR}/meetings" "${STACKS_DIR}/topics" "$CACHE_DIR"
+
+    if [ ! -f "${STACKS_DIR}/.stacks/config" ]; then
+        cat > "${STACKS_DIR}/.stacks/config" <<EOF
+# stacks globals. Facts about this machine, never about individual projects --
+# each project's repo path lives in its page frontmatter, the single source of
+# truth, so repos can sit anywhere on disk.
+STACKS_PR_TTL=${STACKS_PR_TTL}
+EOF
+        echo "created .stacks/config"
+    fi
+
+    if [ ! -f "${STACKS_DIR}/.gitignore" ]; then
+        cat > "${STACKS_DIR}/.gitignore" <<'EOF'
+.stacks/cache/
+.DS_Store
+EOF
+        echo "created .gitignore"
+    fi
+
+    if [ ! -f "${STACKS_DIR}/README.md" ]; then
+        cat > "${STACKS_DIR}/README.md" <<'EOF'
+# stacks
+
+Work tracker for multi-repo work. Notes and tasks live here; code lives in its
+own git repos, wherever they happen to be on disk — each project page records
+its repo path in frontmatter. Driven by the `stacks` command (in `dotfiles/.bin`).
+
+Track a repo by standing in it:
+
+```
+cd /wherever/the/repo/is && stacks new
+```
+
+## Layout
+
+- `projects/<name>/` — one folder per tracked repo:
+  - `README.md` — **generated**, do not edit below the frontmatter. GitHub
+    renders it when you open the folder, so it doubles as the project's
+    dashboard: branch, reviews wanted from you, your PRs and issues, history.
+  - `TASKS.md` — yours. All tasks for this project live here.
+  - `NOTES.md` — yours.
+  - anything else you drop in: PDFs, diagrams, extra notes. Link them from a
+    task with a bare filename, `[spec](spec.pdf)`.
+- `topics/<slug>.md` — durable knowledge that outlives any single PR.
+- `meetings/<date>-<slug>.md` — dated, attendee-shaped notes.
+- `daily/<date>.md` — journal. Gets a generated agenda *snapshot*, never owns project tasks.
+- `DASHBOARD.md` — fully generated by `stacks sync`. Do not edit.
+
+## What `sync` pulls from GitHub
+
+Read-only, always — it never fetches, pulls or checks out in your repos.
+
+Per tracked repo: current branch and divergence, **reviews requested of you**,
+**threads that merely mention you** (which is how review usually gets asked
+for), your open PRs sorted by staleness, your open issues, and review branches
+whose PR is already merged or closed and can be deleted. Anything aimed at you
+on a repo with no project page lands in DASHBOARD's *Elsewhere* section.
+
+Under *History*, your merged PRs grouped by month, any closed without merging,
+and your closed issues — a contribution log you can lift straight into an
+activity report. Capped at `STACKS_MERGED_LIMIT` (25) and cached for a day,
+since closed work does not change.
+
+Matching is by *all* of a repo's remotes, so an issue on your fork and a PR on
+the upstream both land on the same page. If PRs go somewhere other than
+`upstream`/`origin`, edit `slug:` in the page — `stacks new` lists the
+alternatives, and `doctor` complains if the slug names no real remote.
+
+## Task syntax
+
+```markdown
+- [ ] Rebase the accumulator patch onto main @llvm-project #sme due:2026-08-12 !1
+- [~] Review the tiling PR @iree #sme
+- [!] Blocked on upstream review feedback @llvm-project
+- [x] Land the lowering fix @llvm-project
+```
+
+States: `[ ]` open, `[~]` in progress, `[!]` blocked, `[x]` done.
+Tokens: `@project` → `projects/<project>/`, `#tag`, `due:YYYY-MM-DD`, `!N` priority (lower = higher).
+
+`@project` is optional inside a project folder: anything under
+`projects/llvm-project/` is attributed to `llvm-project` unless it names another.
+Only `@` tokens naming a real project count, so `ask @banach-space about it`
+stays as prose.
+
+Tokens are matched only as whole words, so `Wow!` and a `# heading` are never
+mistaken for a priority or a tag, and tasks inside fenced code blocks (like the
+ones above) are ignored.
+
+## Linking
+
+Plain relative markdown links: `[llvm-project](../projects/llvm-project/README.md)`.
+They render and click through on GitHub, unlike `[[wikilinks]]`. `daily/` stays
+flat so every cross-link is exactly one `../`.
+
+## Daily notes never own project tasks
+
+`stacks today` writes a dated *snapshot* of what was open that morning, using
+plain bullets rather than checkboxes — ticking it would be lost. Edit tasks on
+the project page; the live view is `stacks todo`.
+
+Scratch tasks with no `@project` may be written in a daily note. They show up
+under `(no project)` in `stacks todo`, sorted last, so they visibly rot.
+
+## Common commands
+
+```
+stacks today            stacks todo --overdue        stacks sync
+stacks todo             stacks todo --project iree   stacks doctor
+stacks open iree        stacks open iree notes       stacks open iree readme
+```
+EOF
+        echo "created README.md"
+    fi
+
+    echo "--- Vault ready ---"
+    echo ""
+    echo "Next: cd into a repo you work on and run 'stacks new'."
+}
+
+cmd_new() {
+    require_vault
+    local target="" name=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --name) name=${2:-}; shift 2 ;;
+            -*)     die "unknown option: $1" ;;
+            *)      target=$1; shift ;;
+        esac
+    done
+
+    # No path given means "the repo I'm standing in".
+    [ -n "$target" ] || target=$PWD
+    [ -d "$target" ] || die "not a directory: $target"
+
+    # Resolve to the repo root, so running this from a subdirectory works and
+    # the stored path is always canonical.
+    local dir
+    dir=$(git -C "$target" rev-parse --show-toplevel 2>/dev/null) \
+        || die "not inside a git repository: $target"
+
+    [ -n "$name" ] || name=${dir##*/}
+
+    local page dir_page
+    dir_page=$(project_dir "$name")
+    page=$(project_page "$name")
+    [ -f "$page" ] && die "projects/${name}/ already exists (it holds your tasks; refusing to overwrite)"
+    mkdir -p "$dir_page"
+
+    local slug fork branch
+    slug=$(repo_slug "$dir" || true)
+    fork=$(git -C "$dir" remote get-url origin 2>/dev/null || true)
+    fork=${fork%.git}
+    fork=${fork##*github.com[:/]}
+    branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "-")
+
+    cat > "$page" <<EOF
+---
+repo: $(tildify "$dir")
+slug: ${slug:-unknown}
+fork: ${fork:-unknown}
+created: ${TODAY}
+---
+
+# ${name}
+
+[Tasks](TASKS.md) · [Notes](NOTES.md)
+
+<!-- Everything below is regenerated by 'stacks sync'. Edit the frontmatter
+     above if the repo moves or PRs go to a different remote; edit TASKS.md and
+     NOTES.md for anything you write yourself. -->
+
+<!-- stacks:begin prs -->
+<!-- stacks:end prs -->
+
+## History
+
+<!-- stacks:begin history -->
+<!-- stacks:end history -->
+EOF
+
+    cat > "${dir_page}/TASKS.md" <<EOF
+# ${name} — tasks
+
+Back to [${name}](README.md). No need for \`@${name}\` here: anything in this
+folder belongs to this project unless it names another.
+
+EOF
+
+    cat > "${dir_page}/NOTES.md" <<EOF
+# ${name} — notes
+
+Back to [${name}](README.md).
+
+EOF
+
+    echo "--- Created projects/${name}/ ---"
+    echo "  repo    $(tildify "$dir")"
+    echo "  slug    ${slug:-unknown}"
+    echo "  branch  ${branch}"
+
+    # The collaboration remote isn't always named 'upstream', so show the
+    # alternatives rather than silently guessing wrong.
+    local others
+    others=$(repo_slugs "$dir" | grep -vx "${slug:-unknown}" || true)
+    if [ -n "$others" ]; then
+        echo ""
+        echo "  Other remotes on this repo -- if PRs go to one of these, edit"
+        echo "  'slug:' in the page to match:"
+        printf '%s\n' "$others" | sed 's/^/    /'
+    fi
+
+    echo ""
+    echo "  projects/${name}/README.md   generated status (do not edit)"
+    echo "  projects/${name}/TASKS.md    your tasks"
+    echo "  projects/${name}/NOTES.md    your notes"
+    echo ""
+    echo "Drop project-specific files (PDFs, diagrams) in the same folder and link"
+    echo "them with a bare filename: [spec](spec.pdf)"
+    echo ""
+    echo "Write tasks in TASKS.md, then: stacks sync"
+}
+
+cmd_note() {
+    require_vault
+    local spec=${1:-}
+    [ -n "$spec" ] || die "usage: stacks note topic/<slug> | meeting/<slug>"
+
+    local area=${spec%%/*} slug=${spec#*/} path title
+    [ "$area" != "$spec" ] || die "usage: stacks note topic/<slug> | meeting/<slug>"
+    [ -n "$slug" ] || die "empty slug"
+
+    case "$area" in
+        topic|topics)
+            path="${STACKS_DIR}/topics/${slug}.md"
+            title="$slug"
+            ;;
+        meeting|meetings)
+            path="${STACKS_DIR}/meetings/${TODAY}-${slug}.md"
+            title="${TODAY} ${slug}"
+            ;;
+        *)
+            die "unknown area '$area' (expected: topic, meeting)"
+            ;;
+    esac
+
+    [ -f "$path" ] && { echo "exists: ${path#$STACKS_DIR/}"; exec "$STACKS_EDITOR" "$path"; }
+
+    if [ "$area" = "meeting" ] || [ "$area" = "meetings" ]; then
+        cat > "$path" <<EOF
+---
+date: ${TODAY}
+attendees:
+---
+
+# ${title}
+
+## Notes
+
+## Follow-ups
+EOF
+    else
+        cat > "$path" <<EOF
+---
+created: ${TODAY}
+---
+
+# ${title}
+
+EOF
+    fi
+
+    echo "created ${path#$STACKS_DIR/}"
+    exec "$STACKS_EDITOR" "$path"
+}
+
+# A task title may link to a file sitting next to its own page
+# ([spec](spec.pdf) on a project page). Quoted into daily/, that target no
+# longer resolves, so re-anchor it against the source file's directory.
+rebase_links() {
+    awk -v pre="$2" '{
+        out = ""; rest = $0
+        while (match(rest, /\]\([^)]*\)/)) {
+            out = out substr(rest, 1, RSTART - 1)
+            tgt = substr(rest, RSTART + 2, RLENGTH - 3)
+            if (tgt ~ /^(https?:|mailto:|#|\/|\.\.\/)/) out = out "](" tgt ")"
+            else                                        out = out "](" pre "/" tgt ")"
+            rest = substr(rest, RSTART + RLENGTH)
+        }
+        print out rest
+    }' <<< "$1"
+}
+
+# Body of the daily agenda snapshot: plain bullets, deliberately NOT checkboxes.
+render_agenda() {
+    local files rows proj last_proj branch dir
+    files=$(vault_files)
+    [ -n "$files" ] || { echo "No tasks yet."; return 0; }
+
+    # shellcheck disable=SC2086
+    rows=$(scan_tasks open $files | sort_tasks)
+    if [ -z "$rows" ]; then
+        echo "Nothing open."
+        return 0
+    fi
+
+    echo "Open as of $(date +%H:%M) -- edit these on the project page, not here."
+    echo ""
+
+    last_proj=""
+    printf '%s\n' "$rows" | while IFS="$TAB" read -r state prio due proj tags title file line; do
+        if [ "$proj" != "$last_proj" ]; then
+            [ -n "$last_proj" ] && echo ""
+            if [ "$proj" = "~none" ]; then
+                echo "## (no project)"
+            else
+                branch=""
+                if dir=$(resolve_repo "$proj" 2>/dev/null); then
+                    branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+                fi
+                if [ -n "$branch" ]; then
+                    echo "## ${proj} — \`${branch}\`"
+                else
+                    echo "## ${proj}"
+                fi
+            fi
+            last_proj=$proj
+        fi
+
+        meta=""
+        [ "$state" = "~" ] && meta="wip"
+        [ "$state" = "!" ] && meta="blocked"
+        [ "$prio" != "9" ] && meta="${meta}${meta:+ }!${prio}"
+        if [ "$due" != "9999-99-99" ]; then
+            if [ "$due" \< "$TODAY" ]; then
+                meta="${meta}${meta:+ }due:${due} OVERDUE"
+            else
+                meta="${meta}${meta:+ }due:${due}"
+            fi
+        fi
+        [ -n "$meta" ] && meta="\`${meta}\` "
+
+        rel=${file#$STACKS_DIR/}
+        # A project page is projects/<name>/README.md, so the bare basename
+        # would render as an indistinguishable "README.md" on every line.
+        label=${rel%/README.md}
+        [ "$label" = "$rel" ] && label=${rel##*/}
+        label=${label##*/}
+        srcdir=${rel%/*}
+        [ "$srcdir" != "$rel" ] && title=$(rebase_links "$title" "../${srcdir}")
+        [ "$tags" != "-" ] && title="${title} #${tags//,/ #}"
+        echo "- ${meta}${title} — [${label}:${line}](../${rel})"
+    done
+}
+
+cmd_today() {
+    require_vault
+    local refresh=0
+    [ "${1:-}" = "--refresh" ] && refresh=1
+
+    local path="${STACKS_DIR}/daily/${TODAY}.md"
+    local body tmp
+
+    if [ ! -f "$path" ]; then
+        body=$(render_agenda)
+        cat > "$path" <<EOF
+# ${TODAY}
+
+<!-- stacks:begin agenda -->
+${body}
+<!-- stacks:end agenda -->
+
+## Log
+
+## Notes
+EOF
+        echo "created daily/${TODAY}.md"
+    elif [ "$refresh" -eq 1 ]; then
+        tmp=$(mktemp "${TMPDIR:-/tmp}/stacks.XXXXXX")
+        render_agenda > "$tmp"
+        replace_block "$path" agenda "$tmp"
+        rm -f "$tmp"
+        echo "refreshed daily/${TODAY}.md"
+    fi
+
+    exec "$STACKS_EDITOR" "$path"
+}
+
+cmd_todo() {
+    require_vault
+    local want=open f_project="" f_tag="" f_due="" plain=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --project) f_project=${2:-}; shift 2 ;;
+            --tag)     f_tag=${2:-}; shift 2 ;;
+            --state)   want=${2:-open}; shift 2 ;;
+            --overdue) f_due=$TODAY; want=open; shift ;;
+            --due)
+                if [ "${2:-}" != "" ] && [ "${2#--}" = "${2:-}" ]; then
+                    f_due=${2}; shift 2
+                else
+                    f_due=$(date -v+7d +%F); shift
+                fi
+                ;;
+            --plain)   plain=1; shift ;;
+            *)         die "unknown filter: $1" ;;
+        esac
+    done
+
+    case "$want" in
+        open|wip|blocked|done|all) ;;
+        *) die "unknown state '$want' (expected: open, wip, blocked, done, all)" ;;
+    esac
+
+    local files rows
+    files=$(vault_files)
+    [ -n "$files" ] || { echo "No notes yet. Try: stacks new <dirname>"; return 0; }
+    # shellcheck disable=SC2086
+    rows=$(scan_tasks "$want" $files | sort_tasks)
+
+    [ -n "$f_project" ] && rows=$(printf '%s\n' "$rows" | awk -F"$TAB" -v p="$f_project" '$4==p')
+    [ -n "$f_tag" ] && rows=$(printf '%s\n' "$rows" | awk -F"$TAB" -v t="$f_tag" '
+        { n = split($5, a, ","); for (i = 1; i <= n; i++) if (a[i] == t) { print; next } }')
+    if [ -n "$f_due" ]; then
+        if [ "$f_due" = "$TODAY" ]; then
+            rows=$(printf '%s\n' "$rows" | awk -F"$TAB" -v d="$f_due" '$3 != "9999-99-99" && $3 < d')
+        else
+            rows=$(printf '%s\n' "$rows" | awk -F"$TAB" -v d="$f_due" '$3 != "9999-99-99" && $3 <= d')
+        fi
+    fi
+
+    if [ -z "$rows" ]; then
+        echo "No matching tasks."
+        return 0
+    fi
+
+    if [ "$plain" -eq 1 ]; then
+        printf '%s\n' "$rows"
+        return 0
+    fi
+
+    printf '%s\n' "$rows" | awk -F"$TAB" -v today="$TODAY" -v root="${STACKS_DIR}/" '
+      function marker(s) {
+        if (s == "o") return "[ ]"
+        if (s == "~") return "[~]"
+        if (s == "!") return "[!]"
+        if (s == "x") return "[x]"
+        return "[?]"
+      }
+      {
+        if ($4 != last) {
+          if (last != "") print ""
+          print ($4 == "~none" ? "(no project)" : $4)
+          last = $4
+        }
+        prio = ($2 == "9" ? "  " : "!" $2)
+        if ($3 == "9999-99-99")   due = "          "
+        else if ($3 < today)      due = $3
+        else                      due = $3
+        flag = ($3 != "9999-99-99" && $3 < today) ? " OVERDUE" : ""
+        tags = ($5 == "-" ? "" : "  #" $5)
+        gsub(/,/, " #", tags)
+        loc = $7; sub(root, "", loc)
+        printf "  %s %s %s  %s%s%s\n", marker($1), prio, due, $6, tags, flag
+        printf "%*s%s:%s\n", 21, "", loc, $8
+      }'
+}
+
+# Report git + PR status for one project. Read-only against the repo.
+sync_project() {
+    local name=$1 dir slug branch dirty tracking ab prnum json line
+    dir=$(resolve_repo "$name") || return 1
+    slug=$(effective_slug "$dir" "$(project_page "$name")")
+
+    branch=$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "-")
+    dirty=""
+    git -C "$dir" diff --quiet --ignore-submodules HEAD 2>/dev/null || dirty=" · dirty"
+    tracking=$(git -C "$dir" rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo "")
+    ab=""
+    if [ -n "$tracking" ]; then
+        local counts behind ahead
+        counts=$(git -C "$dir" rev-list --left-right --count "${tracking}...HEAD" 2>/dev/null || echo "")
+        if [ -n "$counts" ]; then
+            behind=${counts%%"$TAB"*}
+            ahead=${counts##*"$TAB"}
+            [ "$behind" != "0" ] && ab="${ab} · ${behind} behind"
+            [ "$ahead" != "0" ] && ab="${ab} · ${ahead} ahead"
+        fi
+    fi
+
+    # Two flat sections. The other open PRs are NOT children of the current
+    # branch -- they live on unrelated branches -- so nesting them under it
+    # would assert a relationship that does not exist.
+    local head_line
+    head_line="**Branch** \`${branch}\`${dirty}${ab}"
+    prnum=$(branch_pr_number "$branch")
+    if [ -n "$prnum" ] && [ -n "$slug" ]; then
+        head_line="${head_line} — reviewing [#${prnum}](https://github.com/${slug}/pull/${prnum})"
+    fi
+    echo "$head_line"
+
+    [ -n "$slug" ] || return 0
+
+    local prs count
+    json=$(prs_for_repo "$slug" 2>/dev/null || echo "[]")
+    # Sorted by staleness, newest first: the ones at the bottom are the ones
+    # rotting. reviewDecision is often empty (llvm/llvm-project does not use
+    # required reviews), so age carries the signal instead.
+    prs=$(printf '%s\n' "$json" | jq -r --arg b "$branch" '
+        sort_by(.updatedAt) | reverse | .[]
+        | ((now - (.updatedAt | fromdate)) / 86400 | floor) as $days
+        | "- [#\(.number)](\(.url)) \(.title)"
+          + "\n  `\(.headRefName)`"
+          + (if .isDraft then " · draft" else "" end)
+          + (if .reviewDecision == "APPROVED" then " · approved"
+             elif .reviewDecision == "CHANGES_REQUESTED" then " · changes requested"
+             elif .reviewDecision == "REVIEW_REQUIRED" then " · awaiting review"
+             else "" end)
+          + (if $days < 1 then " · today"
+             elif $days == 1 then " · 1 day ago"
+             else " · \($days) days ago" end)
+          + (if .headRefName == $b then " ← you are here" else "" end)
+        ' 2>/dev/null || true)
+
+    # Waiting on you. Listed first in importance even though it prints after the
+    # branch line: someone else is blocked until you act.
+    local reviews issues slugs_json
+    slugs_json=$(repo_slugs_json "$dir")
+    reviews=$(gh_search review-requested | jq -r --argjson s "$slugs_json" '
+        map(select(.repository.nameWithOwner as $r | $s | index($r))) | sort_by(.updatedAt) | reverse | .[]
+        | ((now - (.updatedAt | fromdate)) / 86400 | floor) as $days
+        | "- [#\(.number)](\(.url)) by `\(.author.login)` — \(.title)"
+          + (if .isDraft then " · draft" else "" end)
+          + (if $days < 1 then " · today" elif $days == 1 then " · 1 day ago"
+             else " · \($days) days ago" end)
+        ' 2>/dev/null || true)
+    if [ -n "$reviews" ]; then
+        count=$(printf '%s\n' "$reviews" | grep -c '^- ')
+        echo ""
+        echo "**Review requested** (${count})"
+        echo ""
+        printf '%s\n' "$reviews"
+    fi
+
+    if [ -n "$prs" ]; then
+        count=$(printf '%s\n' "$prs" | grep -c '^- ')
+        echo ""
+        echo "**My open PRs** (${count})"
+        echo ""
+        printf '%s\n' "$prs"
+    fi
+
+    # Threads that pinged you but are neither yours nor a formal review request.
+    # Deduped against both, otherwise the same PR appears three times.
+    local seen mentions
+    seen=$( { printf '%s\n' "$json" | jq -r '.[].url'
+              gh_search review-requested | jq -r '.[].url'
+              gh_search issues | jq -r '.[].url'
+            } 2>/dev/null | jq -R . | jq -s . 2>/dev/null || echo "[]")
+    mentions=$(gh_search mentions | jq -r --argjson s "$slugs_json" --argjson seen "$seen" '
+        map(select(.repository.nameWithOwner as $r | $s | index($r)))
+        | map(select(.url as $u | ($seen | index($u)) | not))
+        | sort_by(.updatedAt) | reverse | .[]
+        | ((now - (.updatedAt | fromdate)) / 86400 | floor) as $days
+        | "- \(.kind) [#\(.number)](\(.url)) by `\(.author.login // "?")` — \(.title)"
+          + (if $days < 1 then " · today" elif $days == 1 then " · 1 day ago"
+             else " · \($days) days ago" end)
+        ' 2>/dev/null || true)
+    if [ -n "$mentions" ]; then
+        count=$(printf '%s\n' "$mentions" | grep -c '^- ')
+        echo ""
+        echo "**Mentioned** (${count})"
+        echo ""
+        printf '%s\n' "$mentions"
+    fi
+
+    issues=$(gh_search issues | jq -r --argjson s "$slugs_json" '
+        map(select(.repository.nameWithOwner as $r | $s | index($r))) | sort_by(.updatedAt) | reverse | .[]
+        | ((now - (.updatedAt | fromdate)) / 86400 | floor) as $days
+        | "- [#\(.number)](\(.url)) \(.title)"
+          + (if $days < 1 then " · today" elif $days == 1 then " · 1 day ago"
+             else " · \($days) days ago" end)
+        ' 2>/dev/null || true)
+    if [ -n "$issues" ]; then
+        count=$(printf '%s\n' "$issues" | grep -c '^- ')
+        echo ""
+        echo "**My issues** (${count})"
+        echo ""
+        printf '%s\n' "$issues"
+    fi
+}
+
+# The landed record, newest first and grouped by month so it reads as an
+# activity log. Abandoned PRs are listed apart: they are a different kind of
+# fact and burying them among the merged ones misrepresents both.
+history_block() {
+    local name=$1 dir slug json merged closed total_merged total_closed
+    dir=$(resolve_repo "$name" 2>/dev/null) || return 0
+    slug=$(effective_slug "$dir" "$(project_page "$name")" 2>/dev/null || echo "")
+    [ -n "$slug" ] || return 0
+
+    json=$(closed_prs_for_repo "$slug" 2>/dev/null || echo "[]")
+
+    total_merged=$(printf '%s\n' "$json" | jq -r '[.[] | select(.mergedAt != null)] | length' 2>/dev/null || echo 0)
+    total_closed=$(printf '%s\n' "$json" | jq -r '[.[] | select(.mergedAt == null)] | length' 2>/dev/null || echo 0)
+
+    # Closed issues are fetched up front so a repo with issue history but no
+    # merged PRs still gets a section instead of bailing out here.
+    local slugs_json closed_issues n_ci
+    slugs_json=$(repo_slugs_json "$dir")
+    closed_issues=$(gh_search issues-closed | jq -r --argjson s "$slugs_json" \
+        --argjson lim "$STACKS_MERGED_LIMIT" '
+        map(select(.repository.nameWithOwner as $r | $s | index($r)))
+        | sort_by(.closedAt) | reverse | .[0:$lim] | .[]
+        | "- [#\(.number)](\(.url)) \(.title) · closed \(.closedAt[0:10])"
+        ' 2>/dev/null || true)
+
+    [ "${total_merged:-0}" -eq 0 ] && [ "${total_closed:-0}" -eq 0 ] \
+        && [ -z "$closed_issues" ] && return 0
+
+    if [ "${total_merged:-0}" -gt 0 ] || [ "${total_closed:-0}" -gt 0 ]; then
+        local header="**Merged** (${total_merged})"
+        [ "${total_closed:-0}" -gt 0 ] && header="${header} · **closed without merging** (${total_closed})"
+        echo "$header"
+    fi
+
+    merged=$(printf '%s\n' "$json" | jq -r --argjson lim "$STACKS_MERGED_LIMIT" '
+        [.[] | select(.mergedAt != null)]
+        | sort_by(.mergedAt) | reverse | .[0:$lim]
+        | group_by(.mergedAt[0:7])
+        | sort_by(.[0].mergedAt[0:7]) | reverse
+        | .[]
+        | "", "### \(.[0].mergedAt[0:7])", "",
+          (sort_by(.mergedAt) | reverse | .[]
+           | "- [#\(.number)](\(.url)) \(.title) · \(.mergedAt[0:10])")
+        ' 2>/dev/null || true)
+    [ -n "$merged" ] && printf '%s\n' "$merged"
+
+    if [ "${total_merged:-0}" -gt "$STACKS_MERGED_LIMIT" ]; then
+        echo ""
+        echo "_Showing the most recent ${STACKS_MERGED_LIMIT} of ${total_merged}; raise STACKS_MERGED_LIMIT for the full record._"
+    fi
+
+    closed=$(printf '%s\n' "$json" | jq -r '
+        [.[] | select(.mergedAt == null)] | sort_by(.closedAt) | reverse | .[]
+        | "- [#\(.number)](\(.url)) \(.title) · closed \(.closedAt[0:10])"
+        ' 2>/dev/null || true)
+    if [ -n "$closed" ]; then
+        echo ""
+        echo "### Closed without merging"
+        echo ""
+        printf '%s\n' "$closed"
+    fi
+
+    if [ -n "$closed_issues" ]; then
+        n_ci=$(printf '%s\n' "$closed_issues" | grep -c '^- ')
+        echo ""
+        echo "### Closed issues (${n_ci})"
+        echo ""
+        printf '%s\n' "$closed_issues"
+    fi
+}
+
+# Review branches (pr/<author>/<n>) whose PR is already closed or merged are
+# dead weight -- one batched GraphQL query answers for all of them at once.
+stale_review_branches() {
+    local dir=$1 slug=$2 b n q i=0 nums=""
+    [ -n "$slug" ] || return 0
+    for b in $(git -C "$dir" branch --format='%(refname:short)' 2>/dev/null); do
+        n=$(branch_pr_number "$b")
+        [ -n "$n" ] && nums="${nums}${nums:+ }${n}:${b}"
+    done
+    [ -n "$nums" ] || return 0
+
+    q="query { repository(owner:\"${slug%%/*}\", name:\"${slug##*/}\") {"
+    for entry in $nums; do
+        i=$((i + 1))
+        q="$q p${i}: pullRequest(number:${entry%%:*}){number state}"
+    done
+    q="$q } }"
+
+    local closed
+    closed=$(gh api graphql -f query="$q" --jq \
+        '.data.repository | to_entries[] | .value | select(.state != "OPEN") | [.number, .state] | @tsv' \
+        2>/dev/null || true)
+    [ -n "$closed" ] || return 0
+    printf '%s\n' "$closed" | while IFS="$TAB" read -r num state; do
+        for entry in $nums; do
+            [ "${entry%%:*}" = "$num" ] && echo "- \`${entry#*:}\` — #${num} is ${state}"
+        done
+    done
+}
+
+cmd_sync() {
+    require_vault
+    local only=${1:-} projects name tmp dir slug stale tracked_slugs=""
+
+    if [ -n "$only" ]; then
+        projects=$only
+    else
+        projects=$(list_projects)
+    fi
+    [ -n "$projects" ] || die "no project pages yet (run: stacks new <dirname>)"
+
+    command -v jq >/dev/null 2>&1 || warn "jq not found; PR details will be omitted"
+    command -v gh >/dev/null 2>&1 || warn "gh not found; PR details will be omitted"
+
+    tmp=$(mktemp "${TMPDIR:-/tmp}/stacks.XXXXXX")
+
+    {
+        echo "<!-- generated by 'stacks sync'; do not edit -->"
+        echo ""
+        echo "# Dashboard"
+        echo ""
+        echo "Last synced: $(date '+%F %H:%M')"
+        echo ""
+        echo "## Repos"
+        echo ""
+    } > "${tmp}.dash"
+
+    for name in $projects; do
+        echo "--- Syncing ${name} ---"
+        : > "${tmp}.block"
+        sync_project "$name" >> "${tmp}.block" || { warn "$name: skipped"; continue; }
+
+        replace_block "$(project_page "$name")" prs "${tmp}.block"
+
+        : > "${tmp}.merged"
+        history_block "$name" >> "${tmp}.merged" || true
+        [ -s "${tmp}.merged" ] && replace_block "$(project_page "$name")" history "${tmp}.merged"
+
+        {
+            echo "### [${name}](projects/${name}/README.md)"
+            echo ""
+            cat "${tmp}.block"
+            echo ""
+        } >> "${tmp}.dash"
+
+        if dir=$(resolve_repo "$name" 2>/dev/null); then
+            slug=$(effective_slug "$dir" "$(project_page "$name")" 2>/dev/null || echo "")
+            # Every remote, not just the effective one -- otherwise an issue on
+            # a repo's fork reappears under "Elsewhere" despite being tracked.
+            tracked_slugs="${tracked_slugs}$(repo_slugs "$dir")"$'\n'
+            stale=$(stale_review_branches "$dir" "$slug" || true)
+            if [ -n "$stale" ]; then
+                {
+                    echo "Stale review branches (PR no longer open — safe to delete):"
+                    echo ""
+                    printf '%s\n' "$stale"
+                    echo ""
+                } >> "${tmp}.dash"
+            fi
+        fi
+    done
+
+    # Review requests and issues on repos with no project page. Without this
+    # they would be silently dropped, since every other section filters by a
+    # tracked slug -- and "an issue on a repo you don't track" is exactly the
+    # thing you forget about.
+    if [ -z "$only" ]; then
+        local elsewhere_json elsewhere
+        elsewhere_json=$(printf '%s' "$tracked_slugs" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
+        elsewhere=$( { gh_search review-requested | jq -c '.[] | {kind:"review", repo:.repository.nameWithOwner, number, title, url, updatedAt}'
+                       gh_search issues          | jq -c '.[] | {kind:"issue",  repo:.repository.nameWithOwner, number, title, url, updatedAt}'
+                     } 2>/dev/null | jq -s --argjson tracked "$elsewhere_json" -r '
+                map(select(.repo as $r | ($tracked | index($r)) | not))
+                | sort_by(.updatedAt) | reverse | .[]
+                | ((now - (.updatedAt | fromdate)) / 86400 | floor) as $days
+                | "- \(if .kind == "review" then "review" else "issue" end) [\(.repo)#\(.number)](\(.url)) \(.title)"
+                  + (if $days < 1 then " · today" elif $days == 1 then " · 1 day ago"
+                     else " · \($days) days ago" end)
+                ' 2>/dev/null || true)
+        if [ -n "$elsewhere" ]; then
+            {
+                echo "## Elsewhere (untracked repos)"
+                echo ""
+                printf '%s\n' "$elsewhere"
+                echo ""
+            } >> "${tmp}.dash"
+        fi
+    fi
+
+    # Overdue and blocked tasks, straight from the same parser `todo` uses.
+    local files rows
+    files=$(vault_files)
+    if [ -n "$files" ]; then
+        # shellcheck disable=SC2086
+        rows=$(scan_tasks open $files | sort_tasks | awk -F"$TAB" -v today="$TODAY" \
+                 '($3 != "9999-99-99" && $3 < today) || $1 == "!"')
+        if [ -n "$rows" ]; then
+            {
+                echo "## Needs attention"
+                echo ""
+                printf '%s\n' "$rows" | awk -F"$TAB" -v root="${STACKS_DIR}/" '
+                  { loc = $7; sub(root, "", loc)
+                    why = ($1 == "!" ? "blocked" : "overdue " $3)
+                    proj = ($4 == "~none" ? "" : " @" $4)
+                    printf "- %s%s — *%s* — [%s:%s](%s)\n", $6, proj, why, loc, $8, loc }'
+                echo ""
+            } >> "${tmp}.dash"
+        fi
+    fi
+
+    mv "${tmp}.dash" "${STACKS_DIR}/DASHBOARD.md"
+    rm -f "$tmp" "${tmp}.block"
+    echo "--- Wrote DASHBOARD.md ---"
+}
+
+cmd_open() {
+    require_vault
+    local name=${1:-} what=${2:-tasks} matches file
+    [ -n "$name" ] || die "usage: stacks open <project> [tasks|notes|readme]"
+
+    if [ ! -f "$(project_page "$name")" ]; then
+        matches=$(list_projects | grep "^${name}" || true)
+        case "$(printf '%s\n' "$matches" | grep -c .)" in
+            1) name=$(printf '%s\n' "$matches") ;;
+            0) die "no project matching '${name}'" ;;
+            *) echo "ambiguous '${name}':"; printf '%s\n' "$matches" | sed 's/^/  /'; exit 1 ;;
+        esac
+    fi
+
+    # Tasks by default: the page is generated, so it is rarely what you came for.
+    case "$what" in
+        tasks|t)   file="$(project_dir "$name")/TASKS.md" ;;
+        notes|n)   file="$(project_dir "$name")/NOTES.md" ;;
+        readme|r)  file=$(project_page "$name") ;;
+        *)         die "unknown target '$what' (expected: tasks, notes, readme)" ;;
+    esac
+    [ -f "$file" ] || die "${file#$STACKS_DIR/} does not exist"
+    exec "$STACKS_EDITOR" "$file"
+}
+
+cmd_doctor() {
+    require_vault
+    local report f dir target links vf rows proj name page repo slug page_slug
+
+    report=""
+
+    echo "--- Checking relative links ---"
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        dir=$(dirname "$f")
+        # grep returns 1 on no match, which `set -o pipefail` would treat as a
+        # fatal pipeline failure -- hence the explicit guard.
+        # Strip fenced blocks and inline `code` spans first: documentation
+        # showing an example link is not a broken link.
+        links=$(awk '
+            /^[ \t]*(```|~~~)/ { fence = !fence; next }
+            fence { next }
+            { gsub(/`[^`]*`/, ""); print }
+          ' "$f" 2>/dev/null | grep -o ']([^)]*)' || true)
+        [ -n "$links" ] || continue
+        while IFS= read -r target; do
+            target=${target#](}
+            target=${target%)}
+            case "$target" in
+                http*|mailto:*|'#'*|'') continue ;;
+            esac
+            target=${target%%#*}
+            [ -n "$target" ] || continue
+            if [ ! -e "${dir}/${target}" ]; then
+                report="${report}  broken link: ${f#$STACKS_DIR/} -> ${target}"$'\n'
+            fi
+        done <<EOF
+$links
+EOF
+    done <<EOF
+$(find "$STACKS_DIR" -name '*.md' -not -path '*/.stacks/*' | sort)
+EOF
+
+    echo "--- Checking @project tags ---"
+    vf=$(vault_files)
+    if [ -n "$vf" ]; then
+        # shellcheck disable=SC2086
+        rows=$(scan_tasks all $vf | awk -F"$TAB" '$4 != "~none" { print $4 }' | sort -u)
+        for proj in $rows; do
+            [ -f "$(project_page "$proj")" ] && continue
+            report="${report}  unknown project: @${proj} (no projects/${proj}/)"$'\n'
+        done
+    fi
+
+    echo "--- Checking repo paths ---"
+    for name in $(list_projects); do
+        page=$(project_page "$name")
+        repo=$(fm_get "$page" repo || echo "")
+        if [ -z "$repo" ]; then
+            report="${report}  ${name}: no 'repo:' in frontmatter"$'\n'
+            continue
+        fi
+        repo=$(untildify "$repo")
+        if [ ! -d "${repo}/.git" ]; then
+            report="${report}  ${name}: no git repo at ${repo}"$'\n'
+            continue
+        fi
+        # A hand-edited slug is fine as long as it names a remote the repo
+        # really has; anything else is stale and will query the wrong project.
+        page_slug=$(fm_get "$page" slug || echo "")
+        if [ -n "$page_slug" ] && [ "$page_slug" != "unknown" ]; then
+            if ! repo_slugs "$repo" | grep -qx "$page_slug"; then
+                report="${report}  ${name}: slug '${page_slug}' matches no remote of ${repo}"$'\n'
+            fi
+        fi
+    done
+
+    echo ""
+    if [ -z "$report" ]; then
+        echo "--- Clean ---"
+        return 0
+    fi
+    printf '%s' "$report"
+    echo "--- $(printf '%s' "$report" | grep -c . ) problem(s) ---"
+}
+
+# --- Main ---
+COMMAND=${1:-help}
+shift || true
+
+case "$COMMAND" in
+    init)    cmd_init "$@" ;;
+    new)     cmd_new "$@" ;;
+    note)    cmd_note "$@" ;;
+    today)   cmd_today "$@" ;;
+    todo)    cmd_todo "$@" ;;
+    sync)    cmd_sync "$@" ;;
+    open)    cmd_open "$@" ;;
+    doctor)  cmd_doctor "$@" ;;
+    help|*)  print_usage ;;
+esac

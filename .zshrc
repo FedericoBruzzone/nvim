@@ -129,12 +129,16 @@ fi
 
 
 
+# Editor config {
+ export EDITOR=vim
+# }
+
 # dotfiles bin {
-    export PATH="$HOME/.bin:$PATH"
+ export PATH="$HOME/.bin:$PATH"
 # }
 
 # Svn configuration {
- export SVN_EDITOR=nvim
+ export SVN_EDITOR=vim
 # }
 
 # rust configuration {
