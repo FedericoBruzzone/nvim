@@ -48,6 +48,7 @@ print_usage() {
     echo "  sync [project]             Pull branch state, your PRs, reviews requested of you"
     echo "                             and your issues; regenerate DASHBOARD.md and page blocks."
     echo "  open <project> [what]      Open a project's TASKS.md (default), NOTES.md or README.md."
+    echo "  amend                      Fold all vault changes into the last commit and force-push it."
     echo "  doctor                     Report broken links, unknown @projects, stale repo paths."
     echo "  help                       Show this help message."
     echo ""
@@ -1495,6 +1496,33 @@ cmd_open() {
     exec "$STACKS_EDITOR" "$file"
 }
 
+# Fold every pending change into the vault's last commit and republish it.
+# Amending a commit already on the remote rewrites history, so the push must
+# be a force -- --force-with-lease, never plain --force: it refuses if origin
+# has commits this checkout doesn't (e.g. an edit made from another machine),
+# instead of blindly clobbering them.
+cmd_amend() {
+    require_vault
+    [ -d "${STACKS_DIR}/.git" ] || die "${STACKS_DIR} is not a git repo"
+
+    local branch
+    branch=$(git -C "$STACKS_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)
+    [ -n "$branch" ] && [ "$branch" != "HEAD" ] || die "not on a branch (detached HEAD) in ${STACKS_DIR}"
+
+    git -C "$STACKS_DIR" add --all
+
+    if git -C "$STACKS_DIR" diff --cached --quiet; then
+        echo "stacks: nothing to amend, working tree matches the last commit"
+        return 0
+    fi
+
+    echo "--- Amending last commit ---"
+    git -C "$STACKS_DIR" commit --amend --no-edit
+
+    echo "--- Force-pushing (--force-with-lease) ---"
+    git -C "$STACKS_DIR" push --force-with-lease origin "$branch"
+}
+
 cmd_doctor() {
     require_vault
     local report f dir target links vf rows proj name page repo slug page_slug
@@ -1603,6 +1631,7 @@ case "$COMMAND" in
     todo)    cmd_todo "$@" ;;
     sync)    cmd_sync "$@" ;;
     open)    cmd_open "$@" ;;
+    amend)   cmd_amend "$@" ;;
     doctor)  cmd_doctor "$@" ;;
     help|*)  print_usage ;;
 esac
