@@ -52,7 +52,7 @@ print_usage() {
     echo "  help                       Show this help message."
     echo ""
     echo "Task syntax (tasks live in projects/<name>/TASKS.md):"
-    echo "  - [ ] title @project #tag due:YYYY-MM-DD !N     open"
+    echo "  - [ ] title @project #tag due:YYYY-MM-DD !N pr:N   open"
     echo "  - [~] ...                                       in progress"
     echo "  - [!] ...                                       blocked"
     echo "  - [x] ...                                       done"
@@ -60,6 +60,7 @@ print_usage() {
     echo "Filters for 'todo':"
     echo "  --project <name>   Only tasks tagged @<name>."
     echo "  --tag <name>       Only tasks tagged #<name>."
+    echo "  --pr <N>           Only tasks tagged pr:<N>."
     echo "  --state <s>        open (default), wip, blocked, done, all."
     echo "  --due [DATE]       Only tasks due on or before DATE (default: today+7)."
     echo "  --overdue          Only tasks due before today."
@@ -417,20 +418,21 @@ scan_tasks() {
           if (want == "done"    && state != "x") next
         }
 
-        prio = ""; due = ""; proj = ""; tags = ""; title = ""
+        prio = ""; due = ""; proj = ""; tags = ""; title = ""; pr = ""
         n = split(body, w, /[ \t]+/)
         for (i = 1; i <= n; i++) {
           if      (w[i] ~ /^![0-9]+$/)                                        prio = substr(w[i], 2)
           else if (w[i] ~ /^due:[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) due  = substr(w[i], 5)
+          else if (w[i] ~ /^pr:[0-9]+$/)                                      pr   = substr(w[i], 4)
           else if (w[i] ~ /^@[A-Za-z0-9._-]+$/ && index(known, "," substr(w[i], 2) ",")) proj = substr(w[i], 2)
           else if (w[i] ~ /^#[A-Za-z0-9][A-Za-z0-9._\/-]*$/)                  tags = tags (tags == "" ? "" : ",") substr(w[i], 2)
           else if (w[i] != "")                                                title = title (title == "" ? "" : " ") w[i]
         }
         if (proj == "") proj = defproj
 
-        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n",
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n",
                state, (prio == "" ? "9" : prio), (due == "" ? "9999-99-99" : due),
-               (proj == "" ? "~none" : proj), (tags == "" ? "-" : tags), title, FILENAME, FNR
+               (proj == "" ? "~none" : proj), (tags == "" ? "-" : tags), title, FILENAME, FNR, pr
       }' "$@"
 }
 
@@ -934,7 +936,7 @@ render_agenda() {
     echo ""
 
     last_proj=""
-    printf '%s\n' "$rows" | while IFS="$TAB" read -r state prio due proj tags title file line; do
+    printf '%s\n' "$rows" | while IFS="$TAB" read -r state prio due proj tags title file line pr; do
         if [ "$proj" != "$last_proj" ]; then
             [ -n "$last_proj" ] && echo ""
             if [ "$proj" = "~none" ]; then
@@ -964,6 +966,7 @@ render_agenda() {
                 meta="${meta}${meta:+ }due:${due}"
             fi
         fi
+        [ -n "$pr" ] && meta="${meta}${meta:+ }pr:${pr}"
         [ -n "$meta" ] && meta="\`${meta}\` "
 
         rel=${file#$STACKS_DIR/}
@@ -1014,12 +1017,13 @@ EOF
 
 cmd_todo() {
     require_vault
-    local want=open f_project="" f_tag="" f_due="" plain=0
+    local want=open f_project="" f_tag="" f_due="" f_pr="" plain=0
 
     while [ $# -gt 0 ]; do
         case "$1" in
             --project) f_project=${2:-}; shift 2 ;;
             --tag)     f_tag=${2:-}; shift 2 ;;
+            --pr)      f_pr=${2:-}; shift 2 ;;
             --state)   want=${2:-open}; shift 2 ;;
             --overdue) f_due=$TODAY; want=open; shift ;;
             --due)
@@ -1048,6 +1052,7 @@ cmd_todo() {
     [ -n "$f_project" ] && rows=$(printf '%s\n' "$rows" | awk -F"$TAB" -v p="$f_project" '$4==p')
     [ -n "$f_tag" ] && rows=$(printf '%s\n' "$rows" | awk -F"$TAB" -v t="$f_tag" '
         { n = split($5, a, ","); for (i = 1; i <= n; i++) if (a[i] == t) { print; next } }')
+    [ -n "$f_pr" ] && rows=$(printf '%s\n' "$rows" | awk -F"$TAB" -v n="$f_pr" '$9==n')
     if [ -n "$f_due" ]; then
         if [ "$f_due" = "$TODAY" ]; then
             rows=$(printf '%s\n' "$rows" | awk -F"$TAB" -v d="$f_due" '$3 != "9999-99-99" && $3 < d')
@@ -1087,8 +1092,9 @@ cmd_todo() {
         flag = ($3 != "9999-99-99" && $3 < today) ? " OVERDUE" : ""
         tags = ($5 == "-" ? "" : "  #" $5)
         gsub(/,/, " #", tags)
+        prstr = ($9 == "" ? "" : "pr:" $9 " ")
         loc = $7; sub(root, "", loc)
-        printf "  %s %s %s  %s%s%s\n", marker($1), prio, due, $6, tags, flag
+        printf "  %s %s %s  %s%s%s%s\n", marker($1), prio, due, prstr, $6, tags, flag
         printf "%*s%s:%s\n", 21, "", loc, $8
       }'
 }
