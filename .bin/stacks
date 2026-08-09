@@ -18,6 +18,10 @@ STACKS_PR_TTL=${STACKS_PR_TTL:-900}
 # raise the limit if you want the full record in the page.
 STACKS_MERGED_TTL=${STACKS_MERGED_TTL:-86400}
 STACKS_MERGED_LIMIT=${STACKS_MERGED_LIMIT:-25}
+# Elsewhere aggregates four kinds across every repo you've ever touched, so it
+# needs its own, tighter cap or a repo you maintain (years of dependabot-bump
+# reviews) drowns the one or two things on it actually worth noticing.
+STACKS_ELSEWHERE_LIMIT=${STACKS_ELSEWHERE_LIMIT:-15}
 
 # Expand a leading ~ (the default above is literal when it comes from env).
 case "$STACKS_DIR" in "~"*) STACKS_DIR="$HOME${STACKS_DIR#\~}" ;; esac
@@ -35,6 +39,10 @@ print_usage() {
     echo "  new [path] [--name <n>]    Track a git repo (default: the current directory)."
     echo "  note topic/<slug>          Scaffold topics/<slug>.md."
     echo "  note meeting/<slug>        Scaffold meetings/<date>-<slug>.md."
+    echo "  paper new <slug> [opts]    Track a paper: --title --authors --venue --year --url."
+    echo "  paper status <slug> <s>    Set status: to-read, reading, read."
+    echo "  paper open <slug>          Open a paper's page."
+    echo "  papers [--status <s>]      List papers grouped by status."
     echo "  today [--refresh]          Open today's daily note (creates it with an agenda snapshot)."
     echo "  todo [filters]             Aggregate open tasks across the vault."
     echo "  sync [project]             Pull branch state, your PRs, reviews requested of you"
@@ -118,6 +126,22 @@ fm_get() {
           print v; exit
         }
       }' "$1"
+}
+
+# Rewrite one frontmatter key in place. Atomic (temp file + mv), frontmatter
+# only -- a same-named key in body prose is untouched.
+fm_set() {
+    local file=$1 key=$2 val=$3 tmp
+    tmp=$(mktemp "${TMPDIR:-/tmp}/stacks.XXXXXX")
+    awk -v k="$key" -v v="$val" '
+      NR==1 && $0 == "---" { print; infm = 1; next }
+      infm && $0 == "---"  { print; infm = 0; next }
+      infm {
+        i = index($0, ":")
+        if (i && substr($0, 1, i-1) == k) { print k ": " v; next }
+      }
+      { print }
+    ' "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
 # owner/name of a repo's upstream, falling back to origin. Handles git@,
@@ -241,6 +265,17 @@ closed_prs_for_repo() {
     fi
 }
 
+# Your own login, needed to filter yourself out of "PRs I reviewed" (GitHub
+# counts a reply-to-feedback comment on your own PR as a "review" by you, so
+# --reviewed-by=@me returns your own PRs mixed in with everyone else's).
+# Cached without expiry -- a GitHub username does not change under you.
+whoami_gh() {
+    local cache="${CACHE_DIR}/whoami"
+    [ -f "$cache" ] && { cat "$cache"; return 0; }
+    mkdir -p "$CACHE_DIR"
+    gh api user --jq .login 2>/dev/null | tee "$cache" 2>/dev/null || true
+}
+
 # Work that is aimed at you rather than authored by you: review requests and
 # issues. One global search per kind, cached, rather than one query per tracked
 # repo -- the result set is small and this keeps `sync` O(1) in project count.
@@ -248,7 +283,7 @@ closed_prs_for_repo() {
 gh_search() {
     local kind=$1 cache mtime age ok=1 ttl=$STACKS_PR_TTL
     # Closed history is immutable; only the open queries need a short TTL.
-    case "$kind" in issues-closed) ttl=$STACKS_MERGED_TTL ;; esac
+    case "$kind" in issues-closed|reviewed) ttl=$STACKS_MERGED_TTL ;; esac
     cache="${CACHE_DIR}/search-${kind}.json"
     if [ -f "$cache" ]; then
         mtime=$(stat -f %m "$cache")
@@ -301,6 +336,24 @@ gh_search() {
                    --json repository,number,title,url,closedAt 2>/dev/null || echo "[]")
             if printf '%s\n%s\n' "$ca" "$cb" \
                  | jq -s 'add | unique_by(.url)' > "${cache}.tmp" 2>/dev/null; then
+                ok=0
+            fi
+            ;;
+        reviewed)
+            # PRs you reviewed or commented on, closed only ("past PRs"), on
+            # repos other than your own. Both flags separately, since a
+            # comment-only pass (no formal review submitted) satisfies
+            # --commenter but not --reviewed-by.
+            local me rb cm
+            me=$(whoami_gh)
+            rb=$(gh search prs --reviewed-by=@me --state=closed --limit 100 \
+                   --json repository,number,title,url,author,closedAt 2>/dev/null || echo "[]")
+            cm=$(gh search prs --commenter=@me --state=closed --limit 100 \
+                   --json repository,number,title,url,author,closedAt 2>/dev/null || echo "[]")
+            if printf '%s\n%s\n' "$rb" "$cm" \
+                 | jq -s --arg me "$me" \
+                     'add | map(select(.author.login != $me)) | unique_by(.url)' \
+                 > "${cache}.tmp" 2>/dev/null; then
                 ok=0
             fi
             ;;
@@ -437,7 +490,7 @@ state_marker() {
 
 cmd_init() {
     echo "--- Creating vault at ${STACKS_DIR} ---"
-    mkdir -p "${STACKS_DIR}/projects" "${STACKS_DIR}/daily" \
+    mkdir -p "${STACKS_DIR}/projects" "${STACKS_DIR}/daily" "${STACKS_DIR}/papers" \
              "${STACKS_DIR}/meetings" "${STACKS_DIR}/topics" "$CACHE_DIR"
 
     if [ ! -f "${STACKS_DIR}/.stacks/config" ]; then
@@ -714,6 +767,137 @@ EOF
 
     echo "created ${path#$STACKS_DIR/}"
     exec "$STACKS_EDITOR" "$path"
+}
+
+# Papers are not projects: no repo, no branch, no PRs, nothing for `sync` to
+# pull. What they need instead is a reading-list lifecycle, tracked as a plain
+# frontmatter field rather than a checkbox state -- "to-read" is a fact about
+# the paper, not a task on it.
+cmd_paper() {
+    require_vault
+    local sub=${1:-}
+    shift || true
+    case "$sub" in
+        new)    cmd_paper_new "$@" ;;
+        status) cmd_paper_status "$@" ;;
+        open)   cmd_paper_open "$@" ;;
+        *) die "usage: stacks paper new <slug> [--title T] [--authors A] [--venue V] [--year Y] [--url U]
+                     stacks paper status <slug> <to-read|reading|read>
+                     stacks paper open <slug>" ;;
+    esac
+}
+
+cmd_paper_new() {
+    local slug=${1:-}
+    [ -n "$slug" ] || die "usage: stacks paper new <slug> [--title T] [--authors A] [--venue V] [--year Y] [--url U]"
+    shift
+
+    local title="$slug" authors="" venue="" year="" url=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --title)   title=${2:-}; shift 2 ;;
+            --authors) authors=${2:-}; shift 2 ;;
+            --venue)   venue=${2:-}; shift 2 ;;
+            --year)    year=${2:-}; shift 2 ;;
+            --url)     url=${2:-}; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+
+    local dir page
+    dir="${STACKS_DIR}/papers/${slug}"
+    page="${dir}/README.md"
+    [ -f "$page" ] && die "papers/${slug}/ already exists"
+    mkdir -p "$dir"
+
+    cat > "$page" <<EOF
+---
+title: ${title}
+authors: ${authors}
+venue: ${venue}
+year: ${year}
+url: ${url}
+status: to-read
+added: ${TODAY}
+---
+
+# ${title}
+
+## Notes
+
+## Highlights
+EOF
+
+    echo "--- Created papers/${slug}/ ---"
+    echo "  status  to-read"
+    echo ""
+    echo "Drop the PDF beside it and link it: [pdf](paper.pdf)"
+    echo "  stacks paper status ${slug} reading   # when you start"
+    echo "  stacks paper status ${slug} read      # when you finish"
+    echo ""
+    exec "$STACKS_EDITOR" "$page"
+}
+
+cmd_paper_status() {
+    local slug=${1:-} state=${2:-}
+    [ -n "$slug" ] && [ -n "$state" ] || die "usage: stacks paper status <slug> <to-read|reading|read>"
+    case "$state" in
+        to-read|reading|read) ;;
+        *) die "unknown status '$state' (expected: to-read, reading, read)" ;;
+    esac
+    local page="${STACKS_DIR}/papers/${slug}/README.md"
+    [ -f "$page" ] || die "no such paper: ${slug}"
+    fm_set "$page" status "$state"
+    echo "${slug}: ${state}"
+}
+
+cmd_paper_open() {
+    local slug=${1:-} matches page
+    [ -n "$slug" ] || die "usage: stacks paper open <slug>"
+    page="${STACKS_DIR}/papers/${slug}/README.md"
+    if [ ! -f "$page" ]; then
+        matches=$(for d in "${STACKS_DIR}"/papers/*/; do [ -d "$d" ] || continue; basename "${d%/}"; done \
+                    | grep "^${slug}" || true)
+        case "$(printf '%s\n' "$matches" | grep -c .)" in
+            1) page="${STACKS_DIR}/papers/$(printf '%s\n' "$matches")/README.md" ;;
+            0) die "no paper matching '${slug}'" ;;
+            *) echo "ambiguous '${slug}':"; printf '%s\n' "$matches" | sed 's/^/  /'; exit 1 ;;
+        esac
+    fi
+    exec "$STACKS_EDITOR" "$page"
+}
+
+cmd_papers() {
+    require_vault
+    local filter=""
+    [ "${1:-}" = "--status" ] && filter=${2:-}
+
+    local order dir page st title added slugname rows any=0
+    for order in reading to-read read; do
+        [ -n "$filter" ] && [ "$filter" != "$order" ] && continue
+        rows=""
+        for dir in "${STACKS_DIR}"/papers/*/; do
+            [ -d "$dir" ] || continue
+            page="${dir}README.md"
+            [ -f "$page" ] || continue
+            st=$(fm_get "$page" status 2>/dev/null || echo "")
+            [ -z "$st" ] && st="to-read"
+            [ "$st" = "$order" ] || continue
+            title=$(fm_get "$page" title 2>/dev/null || echo "")
+            added=$(fm_get "$page" added 2>/dev/null || echo "0000-00-00")
+            slugname=${dir%/}; slugname=${slugname##*/}
+            rows="${rows}${added}${TAB}${slugname}${TAB}${title}"$'\n'
+        done
+        [ -z "$rows" ] && continue
+        any=1
+        echo "$order"
+        printf '%s' "$rows" | LC_ALL=C sort -r -t"$TAB" -k1,1 \
+            | while IFS="$TAB" read -r added slugname title; do
+                printf '  %s  %-28s %s\n' "$added" "$slugname" "$title"
+            done
+        echo ""
+    done
+    [ "$any" -eq 0 ] && echo "No papers yet. Try: stacks paper new <slug>"
 }
 
 # A task title may link to a file sitting next to its own page
@@ -1049,7 +1233,7 @@ history_block() {
 
     # Closed issues are fetched up front so a repo with issue history but no
     # merged PRs still gets a section instead of bailing out here.
-    local slugs_json closed_issues n_ci
+    local slugs_json closed_issues n_ci n_rv
     slugs_json=$(repo_slugs_json "$dir")
     closed_issues=$(gh_search issues-closed | jq -r --argjson s "$slugs_json" \
         --argjson lim "$STACKS_MERGED_LIMIT" '
@@ -1058,8 +1242,15 @@ history_block() {
         | "- [#\(.number)](\(.url)) \(.title) · closed \(.closedAt[0:10])"
         ' 2>/dev/null || true)
 
+    local reviewed n_rv
+    reviewed=$(gh_search reviewed | jq -r --argjson s "$slugs_json" --argjson lim "$STACKS_MERGED_LIMIT" '
+        map(select(.repository.nameWithOwner as $r | $s | index($r)))
+        | sort_by(.closedAt) | reverse | .[0:$lim] | .[]
+        | "- [#\(.number)](\(.url)) by `\(.author.login)` — \(.title) · closed \(.closedAt[0:10])"
+        ' 2>/dev/null || true)
+
     [ "${total_merged:-0}" -eq 0 ] && [ "${total_closed:-0}" -eq 0 ] \
-        && [ -z "$closed_issues" ] && return 0
+        && [ -z "$closed_issues" ] && [ -z "$reviewed" ] && return 0
 
     if [ "${total_merged:-0}" -gt 0 ] || [ "${total_closed:-0}" -gt 0 ]; then
         local header="**Merged** (${total_merged})"
@@ -1101,6 +1292,14 @@ history_block() {
         echo "### Closed issues (${n_ci})"
         echo ""
         printf '%s\n' "$closed_issues"
+    fi
+
+    if [ -n "$reviewed" ]; then
+        n_rv=$(printf '%s\n' "$reviewed" | grep -c '^- ')
+        echo ""
+        echo "### Reviewed (${n_rv})"
+        echo ""
+        printf '%s\n' "$reviewed"
     fi
 }
 
@@ -1196,20 +1395,32 @@ cmd_sync() {
         fi
     done
 
-    # Review requests and issues on repos with no project page. Without this
-    # they would be silently dropped, since every other section filters by a
-    # tracked slug -- and "an issue on a repo you don't track" is exactly the
-    # thing you forget about.
+    # Review requests, mentions, issues and past reviews on repos with no
+    # project page. Without this they would be silently dropped, since every
+    # other section filters by a tracked slug -- and "an issue on a repo you
+    # don't track" is exactly the thing you forget about. But `reviewed` pulls
+    # up to 100 closed PRs per query with no per-repo cap, so on a repo you
+    # maintain (years of dependabot-bump reviews) this drowns the one or two
+    # things actually worth noticing -- cap to the N most recent overall, not
+    # a wall of history, and dedup across kinds (an issue you're both
+    # assigned to and mentioned in would otherwise print twice).
     if [ -z "$only" ]; then
-        local elsewhere_json elsewhere
+        local elsewhere_json elsewhere elsewhere_total
         elsewhere_json=$(printf '%s' "$tracked_slugs" | grep -v '^$' | jq -R . | jq -s . 2>/dev/null || echo "[]")
-        elsewhere=$( { gh_search review-requested | jq -c '.[] | {kind:"review", repo:.repository.nameWithOwner, number, title, url, updatedAt}'
-                       gh_search issues          | jq -c '.[] | {kind:"issue",  repo:.repository.nameWithOwner, number, title, url, updatedAt}'
-                     } 2>/dev/null | jq -s --argjson tracked "$elsewhere_json" -r '
+        local elsewhere_all
+        elsewhere_all=$( { gh_search review-requested | jq -c '.[] | {kind:"review",   repo:.repository.nameWithOwner, number, title, url, when:.updatedAt}'
+                            gh_search mentions         | jq -c '.[] | {kind:.kind,      repo:.repository.nameWithOwner, number, title, url, when:.updatedAt}'
+                            gh_search issues           | jq -c '.[] | {kind:"issue",    repo:.repository.nameWithOwner, number, title, url, when:.updatedAt}'
+                            gh_search reviewed         | jq -c '.[] | {kind:"reviewed", repo:.repository.nameWithOwner, number, title, url, when:.closedAt}'
+                          } 2>/dev/null | jq -s --argjson tracked "$elsewhere_json" '
                 map(select(.repo as $r | ($tracked | index($r)) | not))
-                | sort_by(.updatedAt) | reverse | .[]
-                | ((now - (.updatedAt | fromdate)) / 86400 | floor) as $days
-                | "- \(if .kind == "review" then "review" else "issue" end) [\(.repo)#\(.number)](\(.url)) \(.title)"
+                | unique_by(.url) | sort_by(.when) | reverse
+                ' 2>/dev/null || echo "[]")
+        elsewhere_total=$(printf '%s\n' "$elsewhere_all" | jq 'length' 2>/dev/null || echo 0)
+        elsewhere=$(printf '%s\n' "$elsewhere_all" | jq -r --argjson lim "$STACKS_ELSEWHERE_LIMIT" '
+                .[0:$lim] | .[]
+                | ((now - (.when | fromdate)) / 86400 | floor) as $days
+                | "- \(.kind) [\(.repo)#\(.number)](\(.url)) \(.title)"
                   + (if $days < 1 then " · today" elif $days == 1 then " · 1 day ago"
                      else " · \($days) days ago" end)
                 ' 2>/dev/null || true)
@@ -1218,6 +1429,10 @@ cmd_sync() {
                 echo "## Elsewhere (untracked repos)"
                 echo ""
                 printf '%s\n' "$elsewhere"
+                if [ "${elsewhere_total:-0}" -gt "$STACKS_ELSEWHERE_LIMIT" ]; then
+                    echo ""
+                    echo "_Showing the most recent ${STACKS_ELSEWHERE_LIMIT} of ${elsewhere_total}; raise STACKS_ELSEWHERE_LIMIT for more._"
+                fi
                 echo ""
             } >> "${tmp}.dash"
         fi
@@ -1346,6 +1561,19 @@ EOF
         fi
     done
 
+    echo "--- Checking papers ---"
+    local pdir pstatus
+    for pdir in "${STACKS_DIR}"/papers/*/; do
+        [ -d "$pdir" ] || continue
+        page="${pdir}README.md"
+        [ -f "$page" ] || { report="${report}  papers/$(basename "${pdir%/}")/: no README.md"$'\n'; continue; }
+        pstatus=$(fm_get "$page" status 2>/dev/null || echo "")
+        case "$pstatus" in
+            to-read|reading|read) ;;
+            *) report="${report}  papers/$(basename "${pdir%/}")/: unknown status '${pstatus}'"$'\n' ;;
+        esac
+    done
+
     echo ""
     if [ -z "$report" ]; then
         echo "--- Clean ---"
@@ -1363,6 +1591,8 @@ case "$COMMAND" in
     init)    cmd_init "$@" ;;
     new)     cmd_new "$@" ;;
     note)    cmd_note "$@" ;;
+    paper)   cmd_paper "$@" ;;
+    papers)  cmd_papers "$@" ;;
     today)   cmd_today "$@" ;;
     todo)    cmd_todo "$@" ;;
     sync)    cmd_sync "$@" ;;
