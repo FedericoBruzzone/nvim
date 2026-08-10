@@ -7,6 +7,20 @@ set -euo pipefail
 # (mlir-opt, mlir-translate, opt, llc, clang, FileCheck, llvm-lit, ...).
 REPO_ROOT=${REPO_ROOT:-~/dev/llvm-project}
 BUILD_DIR=${BUILD_DIR:-${REPO_ROOT}/build}
+# Leave unset for native SME detection (via sysctl on Darwin) with clean
+# pass/skip/xfail results. Set to "env" only when working on I8MM tests,
+# since Darwin hwcap detection doesn't cover I8MM and CMake will otherwise
+# hard-error asking for an emulator -- note this also makes the arm-emulator
+# lit feature available, so SME's VL-forcing tests will be attempted (and
+# fail) again instead of being cleanly skipped.
+ARM_EMULATOR_EXECUTABLE=${ARM_EMULATOR_EXECUTABLE:-}
+# I8MM tests need an emulator on Darwin (no native hwcap mapping), so only
+# force them on when ARM_EMULATOR_EXECUTABLE is explicitly set.
+if [ -n "${ARM_EMULATOR_EXECUTABLE}" ]; then
+    MLIR_RUN_ARM_I8MM_TESTS=ON
+else
+    MLIR_RUN_ARM_I8MM_TESTS=OFF
+fi
 
 # --- Helper Functions ---
 print_usage() {
@@ -37,8 +51,11 @@ print_usage() {
     echo "  help                                           Show this help message."
     echo ""
     echo "Environment:"
-    echo "  REPO_ROOT   Path to the llvm-project repo root (default: ~/dev/llvm-project)"
-    echo "  BUILD_DIR   Path to the build directory (default: \$REPO_ROOT/build)"
+    echo "  REPO_ROOT               Path to the llvm-project repo root (default: ~/dev/llvm-project)"
+    echo "  BUILD_DIR               Path to the build directory (default: \$REPO_ROOT/build)"
+    echo "  ARM_EMULATOR_EXECUTABLE Emulator for AArch64 integration tests (default: unset)."
+    echo "                          Unset: native SME detection, clean pass/skip/xfail, I8MM tests off."
+    echo "                          Set to 'env' to enable I8MM tests (no native Darwin hwcap mapping)."
     echo ""
     echo "Options:"
     echo "  BUILD_TYPE  Build type for configuration (e.g., Debug, Release). Default is Release."
@@ -79,8 +96,9 @@ case $COMMAND in
             -DLLVM_ENABLE_PROJECTS="mlir;clang" \
             -DLLVM_TARGETS_TO_BUILD="AArch64;host" \
             -DMLIR_INCLUDE_INTEGRATION_TESTS=ON \
-            -DARM_EMULATOR_EXECUTABLE=env \
-            -DMLIR_RUN_ARM_I8MM_TESTS=ON \
+            -DMLIR_RUN_ARM_SME_TESTS=ON \
+            -DARM_EMULATOR_EXECUTABLE=${ARM_EMULATOR_EXECUTABLE} \
+            -DMLIR_RUN_ARM_I8MM_TESTS=${MLIR_RUN_ARM_I8MM_TESTS} \
             -DLLVM_ENABLE_RUNTIMES="" \
             -DLLVM_ENABLE_EH=ON \
             -DLLVM_ENABLE_RTTI=ON \
