@@ -1,0 +1,492 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# --- Configuration ---
+# Single build, single config: -DLLVM_ENABLE_PROJECTS="mlir;clang" already
+# produces every tool needed for both MLIR and plain LLVM/Clang workflows
+# (mlir-opt, mlir-translate, opt, llc, clang, FileCheck, llvm-lit, ...).
+REPO_ROOT=${REPO_ROOT:-~/dev/llvm-project}
+BUILD_DIR=${BUILD_DIR:-${REPO_ROOT}/build}
+# Leave unset for native SME/I8MM detection (via sysctl on Darwin) with
+# clean pass/skip/xfail results. Set to "env" only for features without a
+# Darwin hwcap mapping yet, where CMake would otherwise hard-error asking
+# for an emulator -- note this also makes the arm-emulator lit feature
+# available, so SME's/I8MM's VL-forcing or emulator-only tests will be
+# attempted (and fail) again instead of being cleanly skipped.
+# Usefull for enable it: 
+# `cmake -S llvm -B build -DARM_EMULATOR_EXECUTABLE=env`
+# `cmake -S llvm -B build -DARM_EMULATOR_EXECUTABLE=`
+ARM_EMULATOR_EXECUTABLE=${ARM_EMULATOR_EXECUTABLE:-}
+
+# --- Helper Functions ---
+print_usage() {
+    echo "Usage: $0 <command> [arguments]"
+    echo ""
+    echo "Commands:"
+    echo "  config [BUILD_TYPE]                            Configure the project (mlir+clang) with CMake."
+    echo "  build [TARGET]                                 Build the project using ninja (default target: all)."
+    echo "  rebuild                                        Re-configure and build the project from scratch."
+    echo "  run-debug <file> [PASSES/LEVEL] [EMIT] [PASS]  Run mlir-opt or opt (by extension) with debug info."
+    echo "  run-pass <file> <passname> [EMIT]              Run a specific pass on a .mlir or .ll file (by extension)."
+    echo "  clang-pass <file.c> <passname> [LEVEL]         Debug a pass during Clang compilation."
+    echo "  test <folder|file>                             Run the lit test suite."
+    echo "  update-test-checks <file>                      Update FileCheck patterns (.mlir or .ll, by extension)."
+    echo "  mlir-pipeline <file.mlir> [PASSES]             Print the MLIR pass pipeline with timing."
+    echo "  llvm-pipeline [LEVEL]                          Print the LLVM opt pipeline (default LEVEL: -O0)."
+    echo "  translate <file.mlir> [TARGET]                 Translate MLIR to llvm-ir/llvm-bc."
+    echo "  mlir-compile <file.mlir> [OUT] [OPT_LEVEL]     Lower MLIR to LLVM IR and compile to an executable."
+    echo "  emit-llvm <file.c> [LEVEL]                     Generate LLVM IR from a C file."
+    echo "  llvm-compile <file.ll> [OUT] [LLC_OPT]         Compile LLVM IR to an executable via llc+clang."
+    echo "  clang-link <file.ll> [OUT] [OPT_LEVEL]         Compile LLVM IR directly with clang (no llc step)."
+    echo "  check-mlir                                     Run check-mlir."
+    echo "  check-llvm                                     Run check-llvm."
+    echo "  check-llvm-unit                                Run check-llvm-unit."
+    echo "  check-clang                                    Run check-clang."
+    echo "  check-clang-unit                               Run check-clang-unit."
+    echo "  clean                                          Clean the build directory."
+    echo "  help                                           Show this help message."
+    echo ""
+    echo "Environment:"
+    echo "  REPO_ROOT               Path to the llvm-project repo root (default: ~/dev/llvm-project)"
+    echo "  BUILD_DIR               Path to the build directory (default: \$REPO_ROOT/build)"
+    echo "  ARM_EMULATOR_EXECUTABLE Emulator for AArch64 integration tests (default: unset)."
+    echo "                          Unset: native SME/I8MM detection, clean pass/skip/xfail results."
+    echo "                          Set to 'env' only for emulator-only tests (e.g. SVE, VL-forcing SME)."
+    echo ""
+    echo "Options:"
+    echo "  BUILD_TYPE  Build type for configuration (e.g., Debug, Release). Default is Release."
+    echo "  PASSES      MLIR pass pipeline string (e.g., 'canonicalize,cse')."
+    echo "  LEVEL       LLVM optimization level (e.g., -O0, -O1, -O2, -O3, -Os, -Oz)."
+    echo "  EMIT        Type of output to emit: none, mlir/llvm, bc, stdout. Default is stdout."
+    echo "  PASS        If given, restrict debug output to this pass name. Default is all passes."
+    echo "  TARGET      Translation target: llvm-ir, llvm-bc. Default is llvm-ir."
+}
+
+# Dispatch helper: decide which toolchain a file belongs to, by extension.
+detect_lang() {
+    case "$1" in
+        *.mlir) echo "mlir" ;;
+        *.ll|*.bc) echo "llvm" ;;
+        *) echo "unknown" ;;
+    esac
+}
+
+# --- Main Script Logic ---
+
+if [ $# -eq 0 ]; then
+    print_usage
+    exit 0
+fi
+
+COMMAND=$1
+shift
+
+case $COMMAND in
+    config)
+        BUILD_TYPE=${1:-Release}
+        echo "--- Configuring project (mlir+clang, BUILD_TYPE=${BUILD_TYPE}) ---"
+        cmake -G Ninja \
+            -S "${REPO_ROOT}/llvm" \
+            -B "${BUILD_DIR}" \
+            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DLLVM_ENABLE_PROJECTS="mlir;clang" \
+            -DLLVM_TARGETS_TO_BUILD="AArch64;host" \
+            -DMLIR_INCLUDE_INTEGRATION_TESTS=ON \
+            -DMLIR_RUN_ARM_SME_TESTS=ON \
+            -DMLIR_RUN_ARM_I8MM_TESTS=ON \
+            -DARM_EMULATOR_EXECUTABLE=${ARM_EMULATOR_EXECUTABLE} \
+            -DLLVM_ENABLE_RUNTIMES="" \
+            -DLLVM_ENABLE_EH=ON \
+            -DLLVM_ENABLE_RTTI=ON \
+            -DLLVM_ENABLE_ASSERTIONS=ON \
+            -DCMAKE_C_COMPILER=/usr/bin/clang \
+            -DCMAKE_CXX_COMPILER=/usr/bin/clang++ \
+            -DCMAKE_OSX_SYSROOT=$(xcrun --show-sdk-path) \
+            -DLLVM_CCACHE_BUILD=ON
+        ;;
+
+    build)
+        TARGET=${1:-}
+        echo "--- Building target: ${TARGET:-all} ---"
+        ninja -C "${BUILD_DIR}" ${TARGET}
+        ;;
+
+    rebuild)
+        echo "--- Rebuilding project from scratch ---"
+        rm -rf "${BUILD_DIR}"
+        $0 config
+        $0 build
+        ;;
+
+    run-debug)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing file argument for 'run-debug' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        LANG=$(detect_lang "${INPUT_FILE}")
+
+        case "$LANG" in
+            mlir)
+                PASSES=${2:-}
+                EMIT_TYPE=${3:-stdout}
+                DEBUG_PASS=${4:-}
+
+                PASS_FLAGS=""
+                [ -n "$PASSES" ] && PASS_FLAGS="--pass-pipeline=builtin.module(${PASSES})"
+
+                EMIT_FLAGS=""
+                case "$EMIT_TYPE" in
+                    mlir)   EMIT_FLAGS="-o ${INPUT_FILE%.*}.opt.mlir" ;;
+                    stdout) EMIT_FLAGS="-o -" ;;
+                    none)   EMIT_FLAGS="-o /dev/null" ;;
+                    *)
+                        echo "Warning: Unknown emit type '$EMIT_TYPE'. Defaulting to stdout."
+                        EMIT_FLAGS="-o -"
+                        ;;
+                esac
+
+                DEBUG_FLAG="--debug"
+                [ -n "$DEBUG_PASS" ] && DEBUG_FLAG="--debug-only=${DEBUG_PASS}"
+
+                echo "--- Running mlir-opt on ${INPUT_FILE} (Emit: ${EMIT_TYPE}) ---"
+                ${BUILD_DIR}/bin/mlir-opt \
+                    ${PASS_FLAGS} \
+                    --mlir-print-debuginfo \
+                    ${DEBUG_FLAG} \
+                    --mlir-timing \
+                    ${EMIT_FLAGS} \
+                    "${INPUT_FILE}"
+                ;;
+            llvm)
+                OPT_LEVEL=${2:--O0}
+                EMIT_TYPE=${3:-stdout}
+                DEBUG_PASS=${4:-}
+
+                EMIT_FLAGS=""
+                case "$EMIT_TYPE" in
+                    llvm)   EMIT_FLAGS="-S -o ${INPUT_FILE%.*}.opt.ll" ;;
+                    bc)     EMIT_FLAGS="-o ${INPUT_FILE%.*}.opt.bc" ;;
+                    stdout) EMIT_FLAGS="-S -o -" ;;
+                    none)   EMIT_FLAGS="-S -o /dev/null" ;;
+                    *)
+                        echo "Warning: Unknown emit type '$EMIT_TYPE'. Defaulting to stdout."
+                        EMIT_FLAGS="-S -o -"
+                        ;;
+                esac
+
+                DEBUG_FLAG="-debug"
+                [ -n "$DEBUG_PASS" ] && DEBUG_FLAG="-debug-only=${DEBUG_PASS}"
+
+                echo "--- Running opt on ${INPUT_FILE} (Emit: ${EMIT_TYPE}) ---"
+                ${BUILD_DIR}/bin/opt \
+                    ${OPT_LEVEL} \
+                    -stats ${DEBUG_FLAG} \
+                    ${EMIT_FLAGS} \
+                    ${INPUT_FILE}
+                ;;
+            *)
+                echo "Error: Cannot determine toolchain for '${INPUT_FILE}' (expected .mlir, .ll, or .bc)."
+                exit 1
+                ;;
+        esac
+        ;;
+
+    run-pass)
+        if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
+            echo "Error: Missing arguments for 'run-pass' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        PASS_NAME=$2
+        EMIT_TYPE=${3:-none}
+        LANG=$(detect_lang "${INPUT_FILE}")
+
+        case "$LANG" in
+            mlir)
+                EMIT_FLAGS=""
+                case "$EMIT_TYPE" in
+                    mlir)   EMIT_FLAGS="-o ${INPUT_FILE%.*}.${PASS_NAME}.mlir" ;;
+                    stdout) EMIT_FLAGS="-o -" ;;
+                    none)   EMIT_FLAGS="-o /dev/null" ;;
+                    *)
+                        echo "Warning: Unknown emit type '$EMIT_TYPE'. Defaulting to none."
+                        EMIT_FLAGS="-o /dev/null"
+                        ;;
+                esac
+
+                echo "--- Running pass ${PASS_NAME} on ${INPUT_FILE} (Emit: ${EMIT_TYPE}) ---"
+                ${BUILD_DIR}/bin/mlir-opt \
+                    --pass-pipeline="builtin.module(${PASS_NAME})" \
+                    --debug-only="${PASS_NAME}" \
+                    --mlir-timing \
+                    ${EMIT_FLAGS} \
+                    "${INPUT_FILE}"
+                ;;
+            llvm)
+                EMIT_FLAGS=""
+                case "$EMIT_TYPE" in
+                    llvm)   EMIT_FLAGS="-S -o ${INPUT_FILE%.*}.${PASS_NAME}.ll" ;;
+                    bc)     EMIT_FLAGS="-o ${INPUT_FILE%.*}.${PASS_NAME}.bc" ;;
+                    stdout) EMIT_FLAGS="-S -o -" ;;
+                    none)   EMIT_FLAGS="-S -o /dev/null" ;;
+                    *)
+                        echo "Warning: Unknown emit type '$EMIT_TYPE'. Defaulting to none."
+                        EMIT_FLAGS="-S -o /dev/null"
+                        ;;
+                esac
+
+                echo "--- Running pass ${PASS_NAME} on ${INPUT_FILE} (Emit: ${EMIT_TYPE}) ---"
+                ${BUILD_DIR}/bin/opt \
+                    -passes="${PASS_NAME}" \
+                    -debug-only="${PASS_NAME}" \
+                    -stats \
+                    ${EMIT_FLAGS} \
+                    "${INPUT_FILE}"
+                ;;
+            *)
+                echo "Error: Cannot determine toolchain for '${INPUT_FILE}' (expected .mlir, .ll, or .bc)."
+                exit 1
+                ;;
+        esac
+        ;;
+
+    clang-pass)
+        if [ -z "${1:-}" ] || [ -z "${2:-}" ]; then
+            echo "Error: Missing arguments for 'clang-pass' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        PASS_NAME=$2
+        OPT_LEVEL=${3:--O0}
+        SYSROOT=""
+        [[ "$OSTYPE" == "darwin"* ]] && SYSROOT="-isysroot $(xcrun --show-sdk-path)"
+        echo "--- Running Clang with pass ${PASS_NAME} on ${INPUT_FILE} ---"
+        ${BUILD_DIR}/bin/clang \
+            ${OPT_LEVEL} \
+            -mllvm -debug-only="${PASS_NAME}" \
+            -fno-discard-value-names \
+            -S -emit-llvm ${SYSROOT} \
+            ${INPUT_FILE} -o -
+        ;;
+
+    test)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing path argument for 'test' command."
+            print_usage
+            exit 1
+        fi
+        echo "--- Running lit tests ---"
+        ${BUILD_DIR}/bin/llvm-lit -a -v "${1}"
+        ;;
+
+    update-test-checks)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing input file for 'update-test-checks' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        LANG=$(detect_lang "${INPUT_FILE}")
+
+        case "$LANG" in
+            mlir)
+                echo "--- Updating FileCheck patterns in ${INPUT_FILE} ---"
+                python3 "${REPO_ROOT}/llvm/utils/update_test_checks.py" \
+                    --opt-binary=${BUILD_DIR}/bin/mlir-opt \
+                    ${INPUT_FILE}
+                ;;
+            llvm)
+                echo "--- Updating FileCheck patterns in ${INPUT_FILE} ---"
+                python3 "${REPO_ROOT}/llvm/utils/update_test_checks.py" \
+                    --opt-binary=${BUILD_DIR}/bin/opt \
+                    --version 5 \
+                    ${INPUT_FILE}
+                ;;
+            *)
+                echo "Error: Cannot determine toolchain for '${INPUT_FILE}' (expected .mlir or .ll)."
+                exit 1
+                ;;
+        esac
+        ;;
+
+    mlir-pipeline)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing file argument for 'mlir-pipeline' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        PASSES=${2:-canonicalize,cse}
+
+        echo "--- Printing MLIR pipeline for passes: ${PASSES} ---"
+        ${BUILD_DIR}/bin/mlir-opt \
+            --pass-pipeline="builtin.module(${PASSES})" \
+            --mlir-timing \
+            --mlir-print-ir-before-all \
+            --mlir-print-ir-after-all \
+            "${INPUT_FILE}" \
+            -o /dev/null
+        ;;
+
+    llvm-pipeline)
+        OPT_LEVEL=${1:--O0}
+        echo "--- Printing LLVM pipeline for ${OPT_LEVEL} ---"
+        ${BUILD_DIR}/bin/opt --print-pipeline-passes ${OPT_LEVEL} -S /dev/null -o /dev/null
+        ;;
+
+    translate)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing file argument for 'translate' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        TARGET=${2:-llvm-ir}
+
+        case "$TARGET" in
+            llvm-ir)
+                OUTPUT_FILE="${INPUT_FILE%.*}.ll"
+                echo "--- Translating ${INPUT_FILE} to LLVM IR ---"
+                ${BUILD_DIR}/bin/mlir-translate \
+                    --mlir-to-llvmir \
+                    "${INPUT_FILE}" \
+                    -o "${OUTPUT_FILE}"
+                echo "Output: ${OUTPUT_FILE}"
+                ;;
+            llvm-bc)
+                OUTPUT_FILE="${INPUT_FILE%.*}.bc"
+                echo "--- Translating ${INPUT_FILE} to LLVM Bitcode ---"
+                ${BUILD_DIR}/bin/mlir-translate \
+                    --mlir-to-llvmir \
+                    "${INPUT_FILE}" | \
+                ${BUILD_DIR}/bin/llvm-as \
+                    -o "${OUTPUT_FILE}"
+                echo "Output: ${OUTPUT_FILE}"
+                ;;
+            *)
+                echo "Error: Unknown translation target '$TARGET'."
+                echo "Supported targets: llvm-ir, llvm-bc"
+                exit 1
+                ;;
+        esac
+        ;;
+
+    mlir-compile)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing input file for 'mlir-compile' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        OUT_NAME=${2:-${INPUT_FILE%.*}}
+        LLC_OPT=${3:--O0}
+        LL_FILE="${OUT_NAME}.ll"
+        OBJ_FILE="${OUT_NAME}.o"
+        SYSROOT=""
+        [[ "$OSTYPE" == "darwin"* ]] && SYSROOT="-isysroot $(xcrun --show-sdk-path)"
+
+        echo "--- Compiling ${INPUT_FILE} to executable ${OUT_NAME} (llc opts: ${LLC_OPT}) ---"
+        ${BUILD_DIR}/bin/mlir-translate \
+            --mlir-to-llvmir \
+            "${INPUT_FILE}" \
+            -o "${LL_FILE}"
+        ${BUILD_DIR}/bin/llc ${LLC_OPT} -filetype=obj "${LL_FILE}" -o "${OBJ_FILE}"
+        ${BUILD_DIR}/bin/clang "${OBJ_FILE}" -o "${OUT_NAME}" ${SYSROOT}
+        rm -f "${LL_FILE}" "${OBJ_FILE}"
+        ;;
+
+    emit-llvm)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing input file for 'emit-llvm' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        OPT_LEVEL=${2:--O0}
+        OUTPUT_FILE="${INPUT_FILE%.c}.ll"
+        SYSROOT=""
+        [[ "$OSTYPE" == "darwin"* ]] && SYSROOT="-isysroot $(xcrun --show-sdk-path)"
+
+        echo "--- Emitting LLVM IR for ${INPUT_FILE} to ${OUTPUT_FILE} with ${OPT_LEVEL} ---"
+        ${BUILD_DIR}/bin/clang \
+            -S -emit-llvm ${OPT_LEVEL} \
+            -fno-discard-value-names \
+            ${INPUT_FILE} -o ${OUTPUT_FILE} ${SYSROOT}
+        ;;
+
+    llvm-compile)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing input file for 'llvm-compile' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        OUT_NAME=${2:-${INPUT_FILE%.*}}
+        LLC_OPT=${3:--O0}
+        OBJ_FILE="${OUT_NAME}.o"
+        SYSROOT=""
+        [[ "$OSTYPE" == "darwin"* ]] && SYSROOT="-isysroot $(xcrun --show-sdk-path)"
+
+        echo "--- Compiling ${INPUT_FILE} to executable ${OUT_NAME} (llc opts: ${LLC_OPT}) ---"
+        ${BUILD_DIR}/bin/llc ${LLC_OPT} -filetype=obj "${INPUT_FILE}" -o "${OBJ_FILE}"
+        ${BUILD_DIR}/bin/clang "${OBJ_FILE}" -o "${OUT_NAME}" ${SYSROOT}
+        rm -f "${OBJ_FILE}"
+        ;;
+
+    clang-link)
+        if [ -z "${1:-}" ]; then
+            echo "Error: Missing input file for 'clang-link' command."
+            print_usage
+            exit 1
+        fi
+        INPUT_FILE=$1
+        OUT_NAME=${2:-${INPUT_FILE%.*}}
+        OPT_LEVEL=${3:--O0}
+        SYSROOT=""
+        [[ "$OSTYPE" == "darwin"* ]] && SYSROOT="-isysroot $(xcrun --show-sdk-path)"
+
+        echo "--- Compiling ${INPUT_FILE} to executable ${OUT_NAME} (${OPT_LEVEL}) ---"
+        ${BUILD_DIR}/bin/clang ${OPT_LEVEL} "${INPUT_FILE}" -o "${OUT_NAME}" ${SYSROOT}
+        ;;
+
+    check-mlir)
+        echo "--- Running check-mlir ---"
+        ninja -C "${BUILD_DIR}" check-mlir
+        ;;
+
+    check-llvm)
+        echo "--- Running check-llvm ---"
+        ninja -C "${BUILD_DIR}" check-llvm
+        ;;
+
+    check-llvm-unit)
+        echo "--- Running check-llvm-unit ---"
+        ninja -C "${BUILD_DIR}" check-llvm-unit
+        ;;
+
+    check-clang)
+        echo "--- Running check-clang ---"
+        ninja -C "${BUILD_DIR}" check-clang
+        ;;
+
+    check-clang-unit)
+        echo "--- Running check-clang-unit ---"
+        ninja -C "${BUILD_DIR}" check-clang-unit
+        ;;
+
+    clean)
+        echo "--- Cleaning build directory ---"
+        rm -rf "${BUILD_DIR}"
+        ;;
+
+    help|*)
+        print_usage
+        ;;
+esac
+
+echo "--- Done ---"
+

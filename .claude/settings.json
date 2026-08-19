@@ -2,10 +2,18 @@
   "permissions": {
     "defaultMode": "bypassPermissions"
   },
-  "skipDangerousModePermissionPrompt": true,
+  "model": "sonnet",
   "enabledPlugins": {
     "academic-research-skills@academic-research-skills": true
   },
+  "extraKnownMarketplaces": {
+    "academic-research-skills": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/imbad0202/academic-research-skills.git"
+      }
+    }
+  },
   "effortLevel": "high",
-  "model": "sonnet"
+  "skipDangerousModePermissionPrompt": true
 }

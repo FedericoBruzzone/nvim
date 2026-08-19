@@ -140,25 +140,26 @@
     },
 
 
-    "workbench.colorCustomizations": {
-        "terminal.foreground": "#ebdbb2",
-        "panel.background": "#000000",
-        "terminal.background": "#000000",
-        "editor.background": "#000000",
-        "sideBar.background": "#000000",
-        "tab.activeBackground": "#000000",
-        "tab.activeBorderTop": "#3c3836",
-        "tab.activeBorder": "#000000",
-        "tab.border": "#3c3836",
-        "tab.hoverBackground": "#000000",
-        "statusBar.background": "#000000",
-        "activityBar.background": "#000000",
-        "titleBar.activeBackground": "#000000",
-        "titleBar.inactiveBackground": "#000000",
-        "quickInputList.focusBackground": "#000000",
-        "editorGroupHeader.tabsBackground": "#000000",
-        "editorLineNumber.activeForeground": "#ebdbb2"
-    },
+    // Dark Gruvbox color theme
+    // "workbench.colorCustomizations": {
+    //     "terminal.foreground": "#ebdbb2",
+    //     "panel.background": "#000000",
+    //     "terminal.background": "#000000",
+    //     "editor.background": "#000000",
+    //     "sideBar.background": "#000000",
+    //     "tab.activeBackground": "#000000",
+    //     "tab.activeBorderTop": "#3c3836",
+    //     "tab.activeBorder": "#000000",
+    //     "tab.border": "#3c3836",
+    //     "tab.hoverBackground": "#000000",
+    //     "statusBar.background": "#000000",
+    //     "activityBar.background": "#000000",
+    //     "titleBar.activeBackground": "#000000",
+    //     "titleBar.inactiveBackground": "#000000",
+    //     "quickInputList.focusBackground": "#000000",
+    //     "editorGroupHeader.tabsBackground": "#000000",
+    //     "editorLineNumber.activeForeground": "#ebdbb2"
+    // },
 
     "editor.inlayHints.enabled": "on",
     "gitlens.hovers.currentLine.over": "line",
@@ -166,17 +167,10 @@
     "editor.largeFileOptimizations": false,
     "editor.wordWrap": "on",
     "claudeCode.preferredLocation": "panel",
-    "gitlens.ai.model": "vscode",
-    "gitlens.ai.vscode.model": "copilot:gpt-4.1",
     "claudeCode.allowDangerouslySkipPermissions": true,
     "githubPullRequests.pullBranch": "never",
     "cmake.configureOnEdit": false,
     "cmake.configureOnOpen": false,
-
-
-
-
-
     "search.showLineNumbers": true,
     "editor.inlayHints.padding": true,
     "workbench.list.smoothScrolling": true,
@@ -186,5 +180,5 @@
     "chat.viewSessions.orientation": "stacked",
     "git.blame.editorDecoration.enabled": false,
     "workbench.experimental.modernUI": true,
-    "workbench.colorTheme": "Gruvbox Dark Hard",
+    "workbench.colorTheme": "Light 2026",
 }
