@@ -39,10 +39,13 @@ print_usage() {
     echo "  new [path] [--name <n>]    Track a git repo (default: the current directory)."
     echo "  note topic/<slug>          Scaffold topics/<slug>.md."
     echo "  note meeting/<slug>        Scaffold meetings/<date>-<slug>.md."
-    echo "  paper new <slug> [opts]    Track a paper: --title --authors --venue --year --url."
-    echo "  paper status <slug> <s>    Set status: to-read, reading, read."
+echo "  paper new <slug> [--title T]  Track a paper topic; entries are checkbox bullets."
     echo "  paper open <slug>          Open a paper's page."
-    echo "  papers [--status <s>]      List papers grouped by status."
+    echo "  papers [--status <s>]      List papers grouped by status (derived from entries)."
+    echo "  course new <topic> [--title T]  Create a macro-topic page; courses are inline entries."
+    echo "  course add <topic> [opts]       Append an entry: --title --provider --year --url."
+    echo "  course open <topic>             Open a topic's page."
+    echo "  courses [--status <s>]          List course topics grouped by status (derived from entries)."
     echo "  today [--refresh]          Open today's daily note (creates it with an agenda snapshot)."
     echo "  todo [filters]             Aggregate open tasks across the vault."
     echo "  sync [project]             Pull branch state, your PRs, reviews requested of you"
@@ -128,22 +131,6 @@ fm_get() {
           print v; exit
         }
       }' "$1"
-}
-
-# Rewrite one frontmatter key in place. Atomic (temp file + mv), frontmatter
-# only -- a same-named key in body prose is untouched.
-fm_set() {
-    local file=$1 key=$2 val=$3 tmp
-    tmp=$(mktemp "${TMPDIR:-/tmp}/stacks.XXXXXX")
-    awk -v k="$key" -v v="$val" '
-      NR==1 && $0 == "---" { print; infm = 1; next }
-      infm && $0 == "---"  { print; infm = 0; next }
-      infm {
-        i = index($0, ":")
-        if (i && substr($0, 1, i-1) == k) { print k ": " v; next }
-      }
-      { print }
-    ' "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
 # owner/name of a repo's upstream, falling back to origin. Handles git@,
@@ -494,6 +481,7 @@ state_marker() {
 cmd_init() {
     echo "--- Creating vault at ${STACKS_DIR} ---"
     mkdir -p "${STACKS_DIR}/projects" "${STACKS_DIR}/daily" "${STACKS_DIR}/papers" \
+             "${STACKS_DIR}/courses" \
              "${STACKS_DIR}/meetings" "${STACKS_DIR}/topics" "$CACHE_DIR"
 
     if [ ! -f "${STACKS_DIR}/.stacks/config" ]; then
@@ -773,39 +761,34 @@ EOF
 }
 
 # Papers are not projects: no repo, no branch, no PRs, nothing for `sync` to
-# pull. What they need instead is a reading-list lifecycle, tracked as a plain
-# frontmatter field rather than a checkbox state -- "to-read" is a fact about
-# the paper, not a task on it.
+# pull. They are reading lists: checkbox entries with metadata inline, no
+# page-level frontmatter. The page's status is derived from its entries.
 cmd_paper() {
     require_vault
     local sub=${1:-}
     shift || true
     case "$sub" in
         new)    cmd_paper_new "$@" ;;
-        status) cmd_paper_status "$@" ;;
         open)   cmd_paper_open "$@" ;;
-        *) die "usage: stacks paper new <slug> [--title T] [--authors A] [--venue V] [--year Y] [--url U]
-                     stacks paper status <slug> <to-read|reading|read>
-                     stacks paper open <slug>" ;;
+        *) die "usage: stacks paper new <slug> [--title T]
+                     stacks paper open <slug>
+                     (entries are marked - [ ] to-read / - [~] reading / - [x] read)" ;;
     esac
 }
 
 cmd_paper_new() {
     local slug=${1:-}
-    [ -n "$slug" ] || die "usage: stacks paper new <slug> [--title T] [--authors A] [--venue V] [--year Y] [--url U]"
+    [ -n "$slug" ] || die "usage: stacks paper new <slug> [--title T]"
     shift
 
-    local title="$slug" authors="" venue="" year="" url=""
+    local title=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --title)   title=${2:-}; shift 2 ;;
-            --authors) authors=${2:-}; shift 2 ;;
-            --venue)   venue=${2:-}; shift 2 ;;
-            --year)    year=${2:-}; shift 2 ;;
-            --url)     url=${2:-}; shift 2 ;;
+            --title) title=${2:-}; shift 2 ;;
             *) die "unknown option: $1" ;;
         esac
     done
+    [ -z "$title" ] && title="$slug"
 
     local dir page
     dir="${STACKS_DIR}/papers/${slug}"
@@ -814,17 +797,9 @@ cmd_paper_new() {
     mkdir -p "$dir"
 
     cat > "$page" <<EOF
----
-title: ${title}
-authors: ${authors}
-venue: ${venue}
-year: ${year}
-url: ${url}
-status: to-read
-added: ${TODAY}
----
-
 # ${title}
+
+- [ ] Author et al., Title, Venue Year: url
 
 ## Notes
 
@@ -832,41 +807,66 @@ added: ${TODAY}
 EOF
 
     echo "--- Created papers/${slug}/ ---"
-    echo "  status  to-read"
+    echo "  status  to-read (derive from entries: - [ ] to-read, - [~] reading, - [x] read)"
     echo ""
+    echo "Delete the placeholder line; add papers as checkbox entries:"
+    echo "  - [ ] 2025, Author et al. - Title: url"
     echo "Drop the PDF beside it and link it: [pdf](paper.pdf)"
-    echo "  stacks paper status ${slug} reading   # when you start"
-    echo "  stacks paper status ${slug} read      # when you finish"
     echo ""
     exec "$STACKS_EDITOR" "$page"
 }
 
-cmd_paper_status() {
-    local slug=${1:-} state=${2:-}
-    [ -n "$slug" ] && [ -n "$state" ] || die "usage: stacks paper status <slug> <to-read|reading|read>"
-    case "$state" in
-        to-read|reading|read) ;;
-        *) die "unknown status '$state' (expected: to-read, reading, read)" ;;
-    esac
-    local page="${STACKS_DIR}/papers/${slug}/README.md"
-    [ -f "$page" ] || die "no such paper: ${slug}"
-    fm_set "$page" status "$state"
-    echo "${slug}: ${state}"
+# Resolve a slug to a page path: exact match first, then case-insensitive
+# prefix match against the item's directory name. Dies on none or many.
+resolve_item_page() {
+    local kind=$1 slug=$2 page matches
+    page="${STACKS_DIR}/${kind}/${slug}/README.md"
+    if [ ! -f "$page" ]; then
+        matches=$(for d in "${STACKS_DIR}"/${kind}/*/; do [ -d "$d" ] || continue; basename "${d%/}"; done \
+                    | grep -i "^${slug}" || true)
+        case "$(printf '%s\n' "$matches" | grep -c .)" in
+            1) page="${STACKS_DIR}/${kind}/$(printf '%s\n' "$matches")/README.md" ;;
+            0) die "no ${kind%?} matching '${slug}'" ;;
+            *) echo "ambiguous '${slug}':" >&2; printf '%s\n' "$matches" | sed 's/^/  /' >&2; exit 1 ;;
+        esac
+    fi
+    printf '%s' "$page"
+}
+
+# Facts for a topic page (papers/courses). Title comes from frontmatter (kept
+# for compatibility), else the H1 heading; status from frontmatter if present,
+# else derived from the entry checkboxes (any - [~] -> active, all - [x] ->
+# done, otherwise to-do); added from frontmatter if present, else file mtime.
+page_facts() {
+    local page=$1 default_status=$2
+    local title st added open wip done_n
+    title=$(fm_get "$page" title 2>/dev/null || echo "")
+    [ -z "$title" ] && title=$(grep -m1 '^# ' "$page" 2>/dev/null | sed 's/^# //')
+    st=$(fm_get "$page" status 2>/dev/null || echo "")
+    if [ -z "$st" ]; then
+        open=$(grep -cE '^- \[ \]' "$page" || true)
+        wip=$(grep -cE '^- \[~\]' "$page" || true)
+        done_n=$(grep -cE '^- \[x\]' "$page" || true)
+        case "$default_status" in
+            to-read)
+                if [ "$wip" -gt 0 ]; then st="reading"
+                elif [ "$done_n" -gt 0 ] && [ "$open" -eq 0 ] && [ "$wip" -eq 0 ]; then st="read"
+                else st="to-read"; fi ;;
+            to-take)
+                if [ "$wip" -gt 0 ]; then st="ongoing"
+                elif [ "$done_n" -gt 0 ] && [ "$open" -eq 0 ] && [ "$wip" -eq 0 ]; then st="done"
+                else st="to-take"; fi ;;
+        esac
+    fi
+    added=$(fm_get "$page" added 2>/dev/null || echo "")
+    [ -z "$added" ] && added=$(stat -f '%Sm' -t '%F' "$page" 2>/dev/null || echo "0000-00-00")
+    printf '%s\t%s\t%s' "$title" "$st" "$added"
 }
 
 cmd_paper_open() {
-    local slug=${1:-} matches page
+    local slug=${1:-} page
     [ -n "$slug" ] || die "usage: stacks paper open <slug>"
-    page="${STACKS_DIR}/papers/${slug}/README.md"
-    if [ ! -f "$page" ]; then
-        matches=$(for d in "${STACKS_DIR}"/papers/*/; do [ -d "$d" ] || continue; basename "${d%/}"; done \
-                    | grep "^${slug}" || true)
-        case "$(printf '%s\n' "$matches" | grep -c .)" in
-            1) page="${STACKS_DIR}/papers/$(printf '%s\n' "$matches")/README.md" ;;
-            0) die "no paper matching '${slug}'" ;;
-            *) echo "ambiguous '${slug}':"; printf '%s\n' "$matches" | sed 's/^/  /'; exit 1 ;;
-        esac
-    fi
+    page=$(resolve_item_page papers "$slug")
     exec "$STACKS_EDITOR" "$page"
 }
 
@@ -883,11 +883,8 @@ cmd_papers() {
             [ -d "$dir" ] || continue
             page="${dir}README.md"
             [ -f "$page" ] || continue
-            st=$(fm_get "$page" status 2>/dev/null || echo "")
-            [ -z "$st" ] && st="to-read"
+            IFS="$TAB" read -r title st added <<<"$(page_facts "$page" to-read)"
             [ "$st" = "$order" ] || continue
-            title=$(fm_get "$page" title 2>/dev/null || echo "")
-            added=$(fm_get "$page" added 2>/dev/null || echo "0000-00-00")
             slugname=${dir%/}; slugname=${slugname##*/}
             rows="${rows}${added}${TAB}${slugname}${TAB}${title}"$'\n'
         done
@@ -901,6 +898,125 @@ cmd_papers() {
         echo ""
     done
     [ "$any" -eq 0 ] && echo "No papers yet. Try: stacks paper new <slug>"
+}
+
+cmd_course() {
+    require_vault
+    local sub=${1:-}
+    shift || true
+    case "$sub" in
+        new)    cmd_course_new "$@" ;;
+        add)    cmd_course_add "$@" ;;
+        open)   cmd_course_open "$@" ;;
+        *) die "usage: stacks course new <topic> [--title T]
+                     stacks course add <topic> [--title T] [--provider P] [--year Y] [--url U]
+                     stacks course open <topic>
+                     (entries are marked - [ ] to-take / - [~] ongoing / - [x] done)" ;;
+    esac
+}
+
+# Courses live like papers: one folder per macro-topic, courses as plain
+# inline bullets with their metadata written in the text, not frontmatter.
+cmd_course_new() {
+    local slug=${1:-}
+    [ -n "$slug" ] || die "usage: stacks course new <topic> [--title T]"
+    shift
+
+    local title=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --title) title=${2:-}; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+    [ -z "$title" ] && title=$(printf '%s' "$slug" | tr '-' ' ' | perl -pe 's/\b(\w)/\u$1/g')
+
+    local dir page
+    dir="${STACKS_DIR}/courses/${slug}"
+    page="${dir}/README.md"
+    [ -f "$page" ] && die "courses/${slug}/ already exists"
+    mkdir -p "$dir"
+
+    cat > "$page" <<EOF
+# ${title}
+
+## Courses
+
+EOF
+
+    echo "--- Created courses/${slug}/ ---"
+    echo "  status  to-take (derive from entries: - [ ] to-take, - [~] ongoing, - [x] done)"
+    echo ""
+    echo "Append courses as checkbox entries with metadata inline:"
+    echo "  stacks course add ${slug} --title CS149 --provider Stanford --year 2024 --url https://cs149.stanford.edu/"
+    echo ""
+    exec "$STACKS_EDITOR" "$page"
+}
+
+cmd_course_add() {
+    local topic=${1:-}
+    [ -n "$topic" ] || die "usage: stacks course add <topic> [--title T] [--provider P] [--year Y] [--url U]"
+    shift
+
+    local title="" provider="" year="" url=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --title)    title=${2:-}; shift 2 ;;
+            --provider) provider=${2:-}; shift 2 ;;
+            --year)     year=${2:-}; shift 2 ;;
+            --url)      url=${2:-}; shift 2 ;;
+            *) die "unknown option: $1" ;;
+        esac
+    done
+    [ -n "$title" ] || die "course add needs --title"
+
+    local page rel entry meta=""
+    page=$(resolve_item_page courses "$topic")
+    [ -n "$provider" ] && meta="$provider"
+    [ -n "$year" ] && meta="${meta:+${meta}, }${year}"
+    entry="- [ ] ${title}"
+    [ -n "$meta" ] && entry="${entry} (${meta})"
+    [ -n "$url" ] && entry="${entry}: ${url}"
+    printf '%s\n' "$entry" >> "$page"
+    rel=${page#"${STACKS_DIR}"/courses/}; rel=${rel%/README.md}
+    echo "${rel}: ${entry}"
+}
+
+cmd_course_open() {
+    local slug=${1:-} page
+    [ -n "$slug" ] || die "usage: stacks course open <topic>"
+    page=$(resolve_item_page courses "$slug")
+    exec "$STACKS_EDITOR" "$page"
+}
+
+cmd_courses() {
+    require_vault
+    local filter=""
+    [ "${1:-}" = "--status" ] && filter=${2:-}
+
+    local order dir page st title added slugname rows any=0
+    for order in ongoing to-take done; do
+        [ -n "$filter" ] && [ "$filter" != "$order" ] && continue
+        rows=""
+        for dir in "${STACKS_DIR}"/courses/*/; do
+            [ -d "$dir" ] || continue
+            page="${dir}README.md"
+            [ -f "$page" ] || continue
+            IFS="$TAB" read -r title st added <<<"$(page_facts "$page" to-take)"
+            [ "$st" = "$order" ] || continue
+            slugname=${dir%/}; slugname=${slugname##*/}
+            rows="${rows}${added}${TAB}${slugname}${TAB}${title}"$'\n'
+        done
+        [ -z "$rows" ] && continue
+        any=1
+        echo "$order"
+        printf '%s' "$rows" | LC_ALL=C sort -r -t"$TAB" -k1,1 \
+            | while IFS="$TAB" read -r added slugname title; do
+                printf '  %s  %-28s %s\n' "$added" "$slugname" "$title"
+            done
+        echo ""
+    done
+    [ "$any" -eq 0 ] && echo "No course topics yet. Try: stacks course new <topic>"
 }
 
 # A task title may link to a file sitting next to its own page
@@ -1602,10 +1718,28 @@ EOF
         page="${pdir}README.md"
         [ -f "$page" ] || { report="${report}  papers/$(basename "${pdir%/}")/: no README.md"$'\n'; continue; }
         pstatus=$(fm_get "$page" status 2>/dev/null || echo "")
-        case "$pstatus" in
-            to-read|reading|read) ;;
-            *) report="${report}  papers/$(basename "${pdir%/}")/: unknown status '${pstatus}'"$'\n' ;;
-        esac
+        if [ -n "$pstatus" ]; then
+            case "$pstatus" in
+                to-read|reading|read) ;;
+                *) report="${report}  papers/$(basename "${pdir%/}")/: unknown status '${pstatus}'"$'\n' ;;
+            esac
+        fi
+    done
+
+    echo "--- Checking courses ---"
+    local cdir cstatus crel
+    for cdir in "${STACKS_DIR}"/courses/*/; do
+        [ -d "$cdir" ] || continue
+        page="${cdir}README.md"
+        crel=${cdir#"${STACKS_DIR}"/courses/}; crel=${crel%/}
+        [ -f "$page" ] || { report="${report}  courses/${crel}: no README.md"$'\n'; continue; }
+        cstatus=$(fm_get "$page" status 2>/dev/null || echo "")
+        if [ -n "$cstatus" ]; then
+            case "$cstatus" in
+                to-take|ongoing|done) ;;
+                *) report="${report}  courses/${crel}: unknown status '${cstatus}'"$'\n' ;;
+            esac
+        fi
     done
 
     echo ""
@@ -1627,6 +1761,8 @@ case "$COMMAND" in
     note)    cmd_note "$@" ;;
     paper)   cmd_paper "$@" ;;
     papers)  cmd_papers "$@" ;;
+    course)  cmd_course "$@" ;;
+    courses) cmd_courses "$@" ;;
     today)   cmd_today "$@" ;;
     todo)    cmd_todo "$@" ;;
     sync)    cmd_sync "$@" ;;
